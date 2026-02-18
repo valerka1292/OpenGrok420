@@ -254,6 +254,9 @@ class Orchestrator:
         if content:
             yield {"type": "thought", "agent": agent.name, "content": content}
 
+        if not tool_calls and content:
+            self._deliver_collaborator_content_to_leader(agent, content)
+
         if tool_calls:
             should_continue = False
             saw_wait = False
@@ -395,6 +398,9 @@ class Orchestrator:
         if content:
             print(f"[Orchestrator Log] {agent.name} says/thinks: {content}")
 
+        if not tool_calls and content:
+            self._deliver_collaborator_content_to_leader(agent, content)
+
         if tool_calls:
             should_continue = False
             saw_wait = False
@@ -425,6 +431,16 @@ class Orchestrator:
             return None
 
         return None
+
+    def _deliver_collaborator_content_to_leader(self, agent: Agent, content: str) -> None:
+        """Fallback delivery path when collaborator returns plain text without chatroom_send."""
+        text = (content or "").strip()
+        if not text:
+            return
+        self.agents[LEADER_NAME].mailbox.append({
+            "from": agent.name,
+            "content": f"[AUTO-FORWARDED COLLABORATOR RESPONSE] {text}",
+        })
 
     def _format_search_results(self, results: List[Dict[str, Any]]) -> str:
         formatted_results = [
