@@ -31,12 +31,14 @@ class Orchestrator:
 
         active_tasks: Dict[str, asyncio.Task] = {}
         session_steps = 0
+        leader_has_pending_follow_up = True
 
         while session_steps < self.MAX_SESSION_STEPS:
             if leader.mailbox:
                 self._ingest_mailbox(leader)
 
-            if leader.mailbox or session_steps == 0:
+            if leader.mailbox or session_steps == 0 or leader_has_pending_follow_up:
+                leader_has_pending_follow_up = False
                 response = await self._run_agent(leader)
                 session_steps += 1
 
@@ -50,6 +52,9 @@ class Orchestrator:
 
                 for tool_call in tool_calls:
                     await self._handle_tool_call(leader, tool_call)
+
+                if any(tc.get("function", {}).get("name") != "chatroom_send" for tc in tool_calls):
+                    leader_has_pending_follow_up = True
 
             self._launch_ready_agents(active_tasks)
 
@@ -72,7 +77,7 @@ class Orchestrator:
                         )
                 continue
 
-            if not self._has_pending_agent_mailboxes():
+            if not leader_has_pending_follow_up and not self._has_pending_agent_mailboxes():
                 break
 
         return "Error: Session budget reached without final answer."
@@ -101,6 +106,7 @@ class Orchestrator:
 
         active_tasks: Dict[str, asyncio.Task] = {}
         session_steps = 0
+        leader_has_pending_follow_up = True
 
         while session_steps < self.MAX_SESSION_STEPS:
             if leader.mailbox:
@@ -110,7 +116,8 @@ class Orchestrator:
                     "content": f"Leader received {ingested} new team update(s).",
                 }
 
-            if leader.mailbox or session_steps == 0:
+            if leader.mailbox or session_steps == 0 or leader_has_pending_follow_up:
+                leader_has_pending_follow_up = False
                 response = await self._run_agent(leader)
                 session_steps += 1
 
@@ -130,6 +137,9 @@ class Orchestrator:
                 for tool_call in tool_calls:
                     async for ev in self._handle_tool_call_stream(leader, tool_call):
                         yield ev
+
+                if any(tc.get("function", {}).get("name") != "chatroom_send" for tc in tool_calls):
+                    leader_has_pending_follow_up = True
 
             self._launch_ready_agents(active_tasks, stream_mode=True)
 
@@ -151,7 +161,7 @@ class Orchestrator:
                         yield {"type": "thought", "agent": "orchestrator", "content": error_text}
                 continue
 
-            if not self._has_pending_agent_mailboxes():
+            if not leader_has_pending_follow_up and not self._has_pending_agent_mailboxes():
                 break
 
         yield {"type": "token", "content": "Error: Session budget reached without final answer."}
