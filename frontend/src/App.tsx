@@ -3,12 +3,14 @@ import { Menu } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import ChatArea from './components/ChatArea';
 import InputArea from './components/InputArea';
+import useChat from './store/useChat';
 
 const HEALTHCHECK_INTERVAL_MS = 30000;
 
 export default function App() {
     const [isSidebarOpen, setIsSidebarOpen] = useState(true);
     const [isBackendOnline, setIsBackendOnline] = useState<boolean | null>(null);
+    const { loadConversations } = useChat();
 
     useEffect(() => {
         let isMounted = true;
@@ -25,15 +27,17 @@ export default function App() {
         };
 
         void checkHealth();
+        void loadConversations();
         const timer = window.setInterval(() => {
             void checkHealth();
+            void loadConversations();
         }, HEALTHCHECK_INTERVAL_MS);
 
         return () => {
             isMounted = false;
             window.clearInterval(timer);
         };
-    }, []);
+    }, [loadConversations]);
 
     return (
         <div className="flex h-screen bg-bg-body text-text-primary overflow-hidden font-sans selection:bg-accent-blue/30">

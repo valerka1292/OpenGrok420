@@ -44,6 +44,22 @@ WAIT_FUNCTION = {
     }
 }
 
+
+SET_CONVERSATION_TITLE_FUNCTION = {
+    "name": "set_conversation_title",
+    "description": "Set a concise, descriptive conversation title based on the first user message.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "title": {
+                "description": "Short title (3-8 words, no trailing punctuation).",
+                "type": "string"
+            }
+        },
+        "required": ["title"]
+    }
+}
+
 WEB_SEARCH_FUNCTION = {
     "name": "web_search",
     "description": "This action allows you to search the web. You can use search operators like site:reddit.com when needed.",
@@ -69,7 +85,8 @@ WEB_SEARCH_FUNCTION = {
 ALL_TOOLS = [
     {"type": "function", "function": CHATROOM_SEND_FUNCTION},
     {"type": "function", "function": WAIT_FUNCTION},
-    {"type": "function", "function": WEB_SEARCH_FUNCTION}
+    {"type": "function", "function": WEB_SEARCH_FUNCTION},
+    {"type": "function", "function": SET_CONVERSATION_TITLE_FUNCTION}
 ]
 
 # Python Implementations (for execution handling)

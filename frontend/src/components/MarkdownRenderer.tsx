@@ -70,13 +70,14 @@ export default function MarkdownRenderer({ content, className = '' }: MarkdownRe
             prose-headings:text-text-primary prose-strong:text-text-primary prose-a:text-accent-blue prose-a:no-underline hover:prose-a:underline
             prose-ul:my-3 prose-ol:my-3 prose-li:my-1
             prose-blockquote:border-l-accent-blue prose-blockquote:text-text-secondary prose-blockquote:italic
+            prose-table:my-0 prose-th:text-text-primary prose-td:text-text-secondary
             ${className}`}
         >
             <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 components={{
                     code({ className: codeClassName, children, ...props }) {
-                        const match = /language-(\w+)/.exec(codeClassName || '');
+                        const match = /language-([\w-]+)/.exec(codeClassName || '');
                         const code = String(children).replace(/\n$/, '');
 
                         if (match) {
@@ -91,10 +92,33 @@ export default function MarkdownRenderer({ content, className = '' }: MarkdownRe
                     },
                     table({ children }) {
                         return (
-                            <div className="my-4 overflow-x-auto rounded-lg border border-border-subtle">
-                                <table className="w-full text-sm">{children}</table>
+                            <div className="my-5 overflow-x-auto rounded-xl border border-border-subtle bg-bg-surface/40 shadow-[0_8px_20px_rgba(0,0,0,0.2)]">
+                                <table className="w-full min-w-[560px] border-collapse text-sm [&_tr:hover]:bg-white/[0.04]">{children}</table>
                             </div>
                         );
+                    },
+                    thead({ children }) {
+                        return (
+                            <thead className="bg-bg-hover/80 border-b border-border-subtle sticky top-0 z-[1]">
+                                {children}
+                            </thead>
+                        );
+                    },
+                    tbody({ children }) {
+                        return <tbody className="divide-y divide-border-subtle/60">{children}</tbody>;
+                    },
+                    tr({ children }) {
+                        return <tr className="even:bg-white/[0.02]">{children}</tr>;
+                    },
+                    th({ children }) {
+                        return (
+                            <th className="px-4 py-3 text-left text-xs uppercase tracking-wider font-semibold text-text-primary/90">
+                                {children}
+                            </th>
+                        );
+                    },
+                    td({ children }) {
+                        return <td className="px-4 py-3 align-top leading-relaxed">{children}</td>;
                     },
                 }}
             >

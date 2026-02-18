@@ -21,3 +21,5 @@ __pycache__/
 
 # Logs
 *.log
+
+backend/data/history.db
