@@ -117,7 +117,6 @@ PYTHON_RUN_FUNCTION = {
 
 ALL_TOOLS = [
     {"type": "function", "function": CHATROOM_SEND_FUNCTION},
-    {"type": "function", "function": WAIT_FUNCTION},
     {"type": "function", "function": WEB_SEARCH_FUNCTION},
     {"type": "function", "function": SET_CONVERSATION_TITLE_FUNCTION},
     {"type": "function", "function": PYTHON_RUN_FUNCTION}
