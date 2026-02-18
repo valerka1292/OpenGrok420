@@ -1,4 +1,6 @@
-import { History, MessageSquarePlus, PanelLeftClose, Search, Wifi, WifiOff } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { History, MessageSquarePlus, PanelLeftClose, Search, Trash2, Wifi, WifiOff } from 'lucide-react';
+import useChat from '../store/useChat';
 
 interface SidebarProps {
     isOpen: boolean;
@@ -6,13 +8,26 @@ interface SidebarProps {
     isBackendOnline: boolean | null;
 }
 
-const RECENT = [
-    'Анализ продукта и стратегии',
-    'Интеграция API и стриминг',
-    'UI/UX ревью и roadmap',
-];
-
 export default function Sidebar({ isOpen, toggle, isBackendOnline }: SidebarProps) {
+    const [query, setQuery] = useState('');
+    const {
+        conversations,
+        currentConversationId,
+        createConversation,
+        loadConversation,
+        deleteConversation,
+        loadConversations,
+    } = useChat();
+
+    useEffect(() => {
+        const timer = window.setTimeout(() => {
+            void loadConversations(query);
+        }, 200);
+
+        return () => window.clearTimeout(timer);
+    }, [query, loadConversations]);
+
+
     return (
         <div className="flex flex-col h-full p-4">
             <div className="flex items-center justify-between mb-6 px-2">
@@ -43,7 +58,10 @@ export default function Sidebar({ isOpen, toggle, isBackendOnline }: SidebarProp
             </div>
 
             <div className="space-y-2 mb-6">
-                <button className="flex items-center gap-3 w-full px-3 py-2.5 bg-text-primary text-bg-body rounded-xl hover:opacity-90 transition-opacity font-medium">
+                <button
+                    onClick={() => void createConversation()}
+                    className="flex items-center gap-3 w-full px-3 py-2.5 bg-text-primary text-bg-body rounded-xl hover:opacity-90 transition-opacity font-medium"
+                >
                     <MessageSquarePlus size={18} />
                     {isOpen && <span>Новый диалог</span>}
                 </button>
@@ -51,6 +69,8 @@ export default function Sidebar({ isOpen, toggle, isBackendOnline }: SidebarProp
                 <div className="relative group">
                     <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted group-focus-within:text-text-primary" />
                     <input
+                        value={query}
+                        onChange={(e) => setQuery(e.target.value)}
                         type="text"
                         placeholder="Поиск по истории..."
                         className="w-full bg-bg-surface border border-border-subtle rounded-xl py-2 pl-9 pr-3 text-sm focus:outline-none focus:border-text-muted transition-colors placeholder:text-text-muted/50"
@@ -62,12 +82,35 @@ export default function Sidebar({ isOpen, toggle, isBackendOnline }: SidebarProp
                 <div>
                     <div className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-2 px-2">Недавние</div>
                     <div className="space-y-1">
-                        {RECENT.map((item) => (
-                            <button key={item} className="flex items-center gap-3 w-full px-3 py-2.5 rounded-xl hover:bg-white/5 text-text-secondary hover:text-text-primary text-sm text-left transition-colors group">
-                                <History size={16} className="text-text-muted group-hover:text-text-primary" />
-                                <span className="truncate">{item}</span>
-                            </button>
+                        {conversations.map((item) => (
+                            <div
+                                key={item.id}
+                                className={`group flex items-center gap-2 w-full px-2 py-2 rounded-xl transition-colors ${currentConversationId === item.id ? 'bg-white/10' : 'hover:bg-white/5'}`}
+                            >
+                                <button
+                                    onClick={() => void loadConversation(item.id)}
+                                    className="flex-1 min-w-0 flex items-center gap-3 text-text-secondary hover:text-text-primary text-sm text-left"
+                                >
+                                    <History size={16} className="text-text-muted group-hover:text-text-primary flex-shrink-0" />
+                                    <div className="min-w-0">
+                                        <div className="truncate text-text-primary/90">{item.title}</div>
+                                        <div className="truncate text-xs text-text-muted mt-0.5">{item.last_message || 'Пока без сообщений'}</div>
+                                    </div>
+                                </button>
+                                <button
+                                    onClick={() => void deleteConversation(item.id)}
+                                    className="opacity-0 group-hover:opacity-100 text-text-muted hover:text-red-300 transition-opacity p-1"
+                                    title="Удалить диалог"
+                                >
+                                    <Trash2 size={14} />
+                                </button>
+                            </div>
                         ))}
+                        {conversations.length === 0 && (
+                            <div className="px-3 py-5 text-xs text-text-muted border border-dashed border-border-subtle rounded-xl text-center">
+                                История пока пуста. Начните новый диалог.
+                            </div>
+                        )}
                     </div>
                 </div>
             </div>

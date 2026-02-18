@@ -74,7 +74,7 @@ class Orchestrator:
     # Streaming variant  (yields SSE event dicts)
     # ──────────────────────────────────────────────
 
-    async def run_stream(self, user_input: str, temperatures: Dict[str, float] = {}) -> AsyncGenerator[Dict[str, Any], None]:
+    async def run_stream(self, user_input: str, temperatures: Dict[str, float] = {}, require_title_tool: bool = False) -> AsyncGenerator[Dict[str, Any], None]:
         """
         Streaming execution loop. Yields event dicts for the SSE transport.
         Event types: status, thought, tool_use, chatroom_send, wait, token, done.
@@ -86,6 +86,11 @@ class Orchestrator:
                 print(f"[Orchestrator] Set {name} temperature to {temp}")
         
         leader = self.agents[LEADER_NAME]
+        if require_title_tool:
+            leader.add_message(
+                "system",
+                "Before solving the task, call set_conversation_title exactly once with a concise Russian title for this dialog.",
+            )
         leader.add_message("user", user_input)
 
         yield {"type": "status", "content": "Agents thinking..."}
@@ -164,10 +169,14 @@ class Orchestrator:
         if func_name == "chatroom_send":
             message = args.get("message")
             recipients = args.get("to")
+            if not isinstance(message, str) or not message.strip():
+                caller.add_tool_call_result(tool_call_id, "Error: message must be a non-empty string.", func_name)
+                return
             if not isinstance(recipients, list):
                 recipients = [recipients]
 
             sent_info = []
+            seen_targets = set()
             for recipient_name in recipients:
                 target_names = (
                     [n for n in ALL_AGENT_NAMES if n != caller.name]
@@ -175,12 +184,13 @@ class Orchestrator:
                     else [recipient_name]
                 )
                 for target_name in target_names:
-                    if target_name in self.agents:
+                    if target_name in self.agents and target_name not in seen_targets:
                         self.agents[target_name].mailbox.append({
                             "from": caller.name,
                             "content": message,
                         })
                         sent_info.append(target_name)
+                        seen_targets.add(target_name)
 
             if sent_info:
                 # Yield chatroom_send event for each recipient
@@ -194,6 +204,15 @@ class Orchestrator:
                 caller.add_tool_call_result(tool_call_id, f"Message sent to {', '.join(sent_info)}.", func_name)
             else:
                 caller.add_tool_call_result(tool_call_id, f"Error: No valid recipients found in {recipients}.", func_name)
+
+        elif func_name == "set_conversation_title":
+            title = str(args.get("title", "")).strip()
+            if not title:
+                caller.add_tool_call_result(tool_call_id, "Error: title must be non-empty.", func_name)
+                return
+            safe_title = title[:120]
+            yield {"type": "conversation_title", "title": safe_title}
+            caller.add_tool_call_result(tool_call_id, f"Conversation title set: {safe_title}", func_name)
 
         elif func_name == "web_search":
             query = args.get("query")
@@ -337,25 +356,37 @@ class Orchestrator:
         if func_name == "chatroom_send":
             message = args.get("message")
             recipients = args.get("to")
+            if not isinstance(message, str) or not message.strip():
+                caller.add_tool_call_result(tool_call_id, "Error: message must be a non-empty string.", func_name)
+                return
             if not isinstance(recipients, list): recipients = [recipients]
-            
+
             sent_info = []
+            seen_targets = set()
             for recipient_name in recipients:
                 target_names = [n for n in ALL_AGENT_NAMES if n != caller.name] if recipient_name == "All" else [recipient_name]
                 for target_name in target_names:
-                    if target_name in self.agents:
+                    if target_name in self.agents and target_name not in seen_targets:
                         # Inject as SYSTEM message
                         self.agents[target_name].mailbox.append({
                             "from": caller.name, 
                             "content": message
                         })
                         sent_info.append(target_name)
+                        seen_targets.add(target_name)
             
             if not sent_info:
                 caller.add_tool_call_result(tool_call_id, f"Error: No valid recipients found in {recipients}.", func_name)
             else:
                 caller.add_tool_call_result(tool_call_id, f"Message sent to {', '.join(sent_info)}.", func_name)
             
+        elif func_name == "set_conversation_title":
+            title = str(args.get("title", "")).strip()
+            if not title:
+                caller.add_tool_call_result(tool_call_id, "Error: title must be non-empty.", func_name)
+                return
+            caller.add_tool_call_result(tool_call_id, f"Conversation title set: {title[:120]}", func_name)
+
         elif func_name == "web_search":
             query = args.get("query")
             num_results = args.get("num_results", 10)
@@ -443,4 +474,3 @@ class Orchestrator:
             return None
         
         return None
-
