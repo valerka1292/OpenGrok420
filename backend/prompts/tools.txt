@@ -1,0 +1,44 @@
+{
+  "name": "chatroom_send",
+  "description": "Send a message to other agents in your team. If another agent sends you a message while you are thinking, it will be directly inserted into your context as a function turn. If another agent sends you a message while you are making a function call, the message will be appended to the function response of the tool call that you make.",
+  "parameters": {
+    "properties": {
+      "message": {
+        "description": "Message content to send",
+        "type": "string"
+      },
+      "to": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        ],
+        "description": "Names of the message recipients. Pass 'All' to broadcast a message to the entire group."
+      }
+    },
+    "required": ["message", "to"],
+    "type": "object"
+  }
+},
+{
+  "name": "wait",
+  "description": "Wait for a teammate's message or an async tool to return. There is a global timeout of 200.0s across all requests to this tool and a hard limit of 120.0s for each request to this tool.",
+  "parameters": {
+    "properties": {
+      "timeout": {
+        "default": 10,
+        "description": "The maximum amount of time in seconds to wait.",
+        "maximum": 120,
+        "minimum": 1,
+        "type": "integer"
+      }
+    },
+    "type": "object"
+  }
+}
