@@ -14,6 +14,7 @@ class Orchestrator:
 
     def __init__(self):
         self.agents: Dict[str, Agent] = {name: Agent(name) for name in ALL_AGENT_NAMES}
+        self._leader_pending_targets: set[str] = set()
 
     def restore_leader_history(self, messages: List[Dict[str, str]]) -> None:
         """Restore persisted user/assistant history into leader context for multi-turn continuity."""
@@ -59,7 +60,7 @@ class Orchestrator:
                 for tool_call in tool_calls:
                     await self._handle_tool_call(leader, tool_call)
 
-                if any(tc.get("function", {}).get("name") != "chatroom_send" for tc in tool_calls):
+                if any(tc.get("function", {}).get("name") not in {"chatroom_send", "wait"} for tc in tool_calls):
                     leader_has_pending_follow_up = True
 
             self._launch_ready_agents(active_tasks)
@@ -150,7 +151,7 @@ class Orchestrator:
                     async for ev in self._handle_tool_call_stream(leader, tool_call):
                         yield ev
 
-                if any(tc.get("function", {}).get("name") != "chatroom_send" for tc in tool_calls):
+                if any(tc.get("function", {}).get("name") not in {"chatroom_send", "wait"} for tc in tool_calls):
                     leader_has_pending_follow_up = True
 
             self._launch_ready_agents(active_tasks, stream_mode=True)
@@ -214,7 +215,10 @@ class Orchestrator:
         ingested = 0
         while agent.mailbox:
             msg = agent.mailbox.pop(0)
-            agent.add_message("system", self._format_mailbox_message_for_prompt(str(msg.get("from")), msg.get("content")))
+            sender = str(msg.get("from"))
+            if agent.name == LEADER_NAME and sender in self._leader_pending_targets:
+                self._leader_pending_targets.discard(sender)
+            agent.add_message("system", self._format_mailbox_message_for_prompt(sender, msg.get("content")))
             ingested += 1
         return ingested
 
@@ -320,6 +324,30 @@ class Orchestrator:
         agent.messages.append(msg_obj)
         return response
 
+    def _route_chatroom_message(self, caller: Agent, recipients: List[Any], message: str) -> tuple[list[str], list[str]]:
+        sent_info: list[str] = []
+        skipped_pending: list[str] = []
+        seen_targets = set()
+
+        for recipient_name in recipients:
+            target_names = [n for n in ALL_AGENT_NAMES if n != caller.name] if recipient_name == "All" else [recipient_name]
+            for target_name in target_names:
+                if target_name not in self.agents or target_name in seen_targets:
+                    continue
+                if caller.name == LEADER_NAME and target_name != LEADER_NAME and target_name in self._leader_pending_targets:
+                    skipped_pending.append(target_name)
+                    seen_targets.add(target_name)
+                    continue
+
+                self.agents[target_name].mailbox.append({"from": caller.name, "content": message})
+                sent_info.append(target_name)
+                seen_targets.add(target_name)
+
+                if caller.name == LEADER_NAME and target_name != LEADER_NAME:
+                    self._leader_pending_targets.add(target_name)
+
+        return sent_info, skipped_pending
+
     async def _handle_tool_call_stream(self, caller: Agent, tool_call: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
         """Execute tool and yield corresponding SSE events."""
         func_name = tool_call["function"]["name"]
@@ -341,22 +369,29 @@ class Orchestrator:
             if not isinstance(recipients, list):
                 recipients = [recipients]
 
-            sent_info: List[str] = []
-            seen_targets = set()
-            for recipient_name in recipients:
-                target_names = [n for n in ALL_AGENT_NAMES if n != caller.name] if recipient_name == "All" else [recipient_name]
-                for target_name in target_names:
-                    if target_name in self.agents and target_name not in seen_targets:
-                        self.agents[target_name].mailbox.append({"from": caller.name, "content": message})
-                        sent_info.append(target_name)
-                        seen_targets.add(target_name)
+            sent_info, skipped_pending = self._route_chatroom_message(caller, recipients, message)
 
             if sent_info:
                 for name in sent_info:
                     yield {"type": "chatroom_send", "agent": caller.name, "to": name, "content": message[:200]}
-                caller.add_tool_call_result(tool_call_id, f"Message sent to {', '.join(sent_info)}.", func_name)
+
+            if sent_info or skipped_pending:
+                status_parts = []
+                if sent_info:
+                    status_parts.append(f"sent to {', '.join(sent_info)}")
+                if skipped_pending:
+                    status_parts.append(f"skipped pending: {', '.join(skipped_pending)}")
+                caller.add_tool_call_result(tool_call_id, "; ".join(status_parts), func_name)
             else:
                 caller.add_tool_call_result(tool_call_id, f"Error: No valid recipients found in {recipients}.", func_name)
+
+        elif func_name == "wait":
+            caller.add_tool_call_result(tool_call_id, "", func_name)
+            return
+
+        elif func_name == "wait":
+            caller.add_tool_call_result(tool_call_id, "", func_name)
+            return
 
         elif func_name == "set_conversation_title":
             title = str(args.get("title", "")).strip()
@@ -412,20 +447,21 @@ class Orchestrator:
             if not isinstance(recipients, list):
                 recipients = [recipients]
 
-            sent_info = []
-            seen_targets = set()
-            for recipient_name in recipients:
-                target_names = [n for n in ALL_AGENT_NAMES if n != caller.name] if recipient_name == "All" else [recipient_name]
-                for target_name in target_names:
-                    if target_name in self.agents and target_name not in seen_targets:
-                        self.agents[target_name].mailbox.append({"from": caller.name, "content": message})
-                        sent_info.append(target_name)
-                        seen_targets.add(target_name)
+            sent_info, skipped_pending = self._route_chatroom_message(caller, recipients, message)
 
-            if not sent_info:
-                caller.add_tool_call_result(tool_call_id, f"Error: No valid recipients found in {recipients}.", func_name)
+            if sent_info or skipped_pending:
+                status_parts = []
+                if sent_info:
+                    status_parts.append(f"sent to {', '.join(sent_info)}")
+                if skipped_pending:
+                    status_parts.append(f"skipped pending: {', '.join(skipped_pending)}")
+                caller.add_tool_call_result(tool_call_id, "; ".join(status_parts), func_name)
             else:
-                caller.add_tool_call_result(tool_call_id, f"Message sent to {', '.join(sent_info)}.", func_name)
+                caller.add_tool_call_result(tool_call_id, f"Error: No valid recipients found in {recipients}.", func_name)
+
+        elif func_name == "wait":
+            caller.add_tool_call_result(tool_call_id, "", func_name)
+            return
 
         elif func_name == "set_conversation_title":
             title = str(args.get("title", "")).strip()

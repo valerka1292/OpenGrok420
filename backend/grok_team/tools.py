@@ -32,6 +32,17 @@ CHATROOM_SEND_FUNCTION = {
     }
 }
 
+
+WAIT_FUNCTION = {
+    "name": "wait",
+    "description": "No-op waiting signal. Use when you are waiting for teammate replies; it does not execute work.",
+    "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": False
+    }
+}
+
 SET_CONVERSATION_TITLE_FUNCTION = {
     "name": "set_conversation_title",
     "description": "Set a concise, descriptive conversation title based on the first user message.",

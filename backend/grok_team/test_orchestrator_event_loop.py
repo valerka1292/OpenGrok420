@@ -38,6 +38,7 @@ class ScriptedOrchestrator(Orchestrator):
     def __init__(self, leader_responses):
         self.agents = {name: FakeAgent(name) for name in ALL_AGENT_NAMES}
         self._leader_responses = list(leader_responses)
+        self._leader_pending_targets = set()
 
     async def _run_agent(self, agent, extra_system_context=None, allowed_tool_names=None):
         if agent.name != LEADER_NAME:
@@ -65,6 +66,7 @@ class DelayedCollaborationOrchestrator(Orchestrator):
     def __init__(self, leader_responses):
         self.agents = {name: FakeAgent(name) for name in ALL_AGENT_NAMES}
         self._leader_responses = list(leader_responses)
+        self._leader_pending_targets = set()
 
     async def _run_agent(self, agent, extra_system_context=None, allowed_tool_names=None):
         if agent.name == LEADER_NAME:
@@ -277,6 +279,55 @@ class OrchestratorEventLoopTests(unittest.IsolatedAsyncioTestCase):
         token_text = "".join(e.get("content", "") for e in events if e.get("type") == "token")
         self.assertIn("Готово, получил ответы от всех.", token_text)
 
+
+    async def test_leader_does_not_resend_to_same_pending_agent(self):
+        orch = ScriptedOrchestrator([])
+        leader = orch.agents[LEADER_NAME]
+
+        await orch._handle_tool_call(
+            leader,
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {
+                    "name": "chatroom_send",
+                    "arguments": json.dumps({"to": "Benjamin", "message": "first"}),
+                },
+            },
+        )
+        await orch._handle_tool_call(
+            leader,
+            {
+                "id": "call_2",
+                "type": "function",
+                "function": {
+                    "name": "chatroom_send",
+                    "arguments": json.dumps({"to": "Benjamin", "message": "duplicate"}),
+                },
+            },
+        )
+
+        self.assertEqual(len(orch.agents["Benjamin"].mailbox), 1)
+
+    async def test_wait_tool_noop_without_args(self):
+        orch = ScriptedOrchestrator([])
+        leader = orch.agents[LEADER_NAME]
+        await orch._handle_tool_call(
+            leader,
+            {
+                "id": "call_wait",
+                "type": "function",
+                "function": {
+                    "name": "wait",
+                    "arguments": "{}",
+                },
+            },
+        )
+
+        last = leader.messages[-1]
+        self.assertEqual(last["role"], "tool")
+        self.assertEqual(last["name"], "wait")
+        self.assertEqual(last["content"], "")
 
 
 if __name__ == "__main__":

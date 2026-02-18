@@ -25,4 +25,13 @@
     "required": ["message", "to"],
     "type": "object"
   }
+},
+{
+  "name": "wait",
+  "description": "No-op waiting signal. Use this when you have already delegated tasks and are waiting for teammates. This tool has no arguments and no payload result.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  }
 }
