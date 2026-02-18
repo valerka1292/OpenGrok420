@@ -98,7 +98,14 @@ async def chat_stream(req: ChatRequest):
     async with history_lock:
         conversation = await history_store.get_or_create(req.conversation_id)
         was_new_conversation = len(conversation.messages) == 0
+        previous_messages = [
+            {"role": msg.role, "content": msg.content}
+            for msg in conversation.messages
+            if msg.role in {"user", "assistant"}
+        ]
         await history_store.add_message(conversation.id, StoredMessage(role='user', content=req.message))
+
+    orchestrator.restore_leader_history(previous_messages)
 
     async def event_generator():
         assistant_tokens: list[str] = []
