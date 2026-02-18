@@ -53,7 +53,7 @@ export default function SettingsModal({ isOpen, onClose, temperatures, setAgentT
                             <div className="flex items-center justify-between">
                                 <label className={`text-sm font-medium ${agent.color}`}>{agent.name}</label>
                                 <span className="text-xs font-mono text-text-muted bg-bg-hover px-2 py-0.5 rounded">
-                                    {temperatures[agent.name]?.toFixed(1) || 0.7}
+                                    {(temperatures[agent.name] ?? 0.7).toFixed(1)}
                                 </span>
                             </div>
 
@@ -62,7 +62,7 @@ export default function SettingsModal({ isOpen, onClose, temperatures, setAgentT
                                 min="0"
                                 max="1"
                                 step="0.1"
-                                value={temperatures[agent.name] || 0.7}
+                                value={temperatures[agent.name] ?? 0.7}
                                 onChange={(e) => setAgentTemperature(agent.name, parseFloat(e.target.value))}
                                 className={`w-full h-1.5 bg-bg-active rounded-lg appearance-none cursor-pointer hover:opacity-100 opacity-80 transition-opacity focus:outline-none ${agent.accent}`}
                                 style={{ accentColor: 'currentColor' }}
