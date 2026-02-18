@@ -29,7 +29,7 @@ CHATROOM_SEND_FUNCTION = {
 
 WAIT_FUNCTION = {
     "name": "wait",
-    "description": "Wait for a teammate's message. Use this when you have delegated a task and need the result before proceeding.",
+    "description": "Wait for a teammate's message or an async tool to return. There is a global timeout of 200.0s across all requests to this tool and a hard limit of 120.0s for each request to this tool.",
     "parameters": {
         "type": "object",
         "properties": {
