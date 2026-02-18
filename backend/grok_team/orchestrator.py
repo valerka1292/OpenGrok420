@@ -49,8 +49,12 @@ class Orchestrator:
                     print(f"[Orchestrator Log] {leader.name} says/thinks: {content}")
 
                 if not tool_calls and content:
-                    await self._cancel_active_tasks(active_tasks)
-                    return content
+                    has_outstanding_collaboration = bool(active_tasks) or self._has_pending_agent_mailboxes()
+                    if has_outstanding_collaboration:
+                        leader_has_pending_follow_up = True
+                    else:
+                        await self._cancel_active_tasks(active_tasks)
+                        return content
 
                 for tool_call in tool_calls:
                     await self._handle_tool_call(leader, tool_call)
@@ -131,12 +135,16 @@ class Orchestrator:
                     yield {"type": "thought", "agent": leader.name, "content": content}
 
                 if not tool_calls and content:
-                    await self._cancel_active_tasks(active_tasks)
-                    for i, word in enumerate(content.split(" ")):
-                        yield {"type": "token", "content": word if i == 0 else f" {word}"}
-                        await asyncio.sleep(0.02)
-                    yield {"type": "done"}
-                    return
+                    has_outstanding_collaboration = bool(active_tasks) or self._has_pending_agent_mailboxes()
+                    if has_outstanding_collaboration:
+                        leader_has_pending_follow_up = True
+                    else:
+                        await self._cancel_active_tasks(active_tasks)
+                        for i, word in enumerate(content.split(" ")):
+                            yield {"type": "token", "content": word if i == 0 else f" {word}"}
+                            await asyncio.sleep(0.02)
+                        yield {"type": "done"}
+                        return
 
                 for tool_call in tool_calls:
                     async for ev in self._handle_tool_call_stream(leader, tool_call):

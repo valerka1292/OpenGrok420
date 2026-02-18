@@ -1,6 +1,7 @@
 import os
 import sys
 
+import asyncio
 import json
 import unittest
 
@@ -58,6 +59,55 @@ class ScriptedOrchestrator(Orchestrator):
     async def _handle_tool_call_stream(self, caller, tool_call):
         async for ev in Orchestrator._handle_tool_call_stream(self, caller, tool_call):
             yield ev
+
+
+class DelayedCollaborationOrchestrator(Orchestrator):
+    def __init__(self, leader_responses):
+        self.agents = {name: FakeAgent(name) for name in ALL_AGENT_NAMES}
+        self._leader_responses = list(leader_responses)
+
+    async def _run_agent(self, agent, extra_system_context=None, allowed_tool_names=None):
+        if agent.name == LEADER_NAME:
+            response = self._leader_responses.pop(0)
+        elif agent.name == "Harper":
+            response = {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": "h1",
+                        "type": "function",
+                        "function": {
+                            "name": "chatroom_send",
+                            "arguments": json.dumps({"to": LEADER_NAME, "message": "Harper done"}),
+                        },
+                    }
+                ],
+            }
+        elif agent.name == "Benjamin":
+            await asyncio.sleep(0.05)
+            response = {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": "b1",
+                        "type": "function",
+                        "function": {
+                            "name": "chatroom_send",
+                            "arguments": json.dumps({"to": LEADER_NAME, "message": "Benjamin done"}),
+                        },
+                    }
+                ],
+            }
+        else:
+            response = {"role": "assistant", "content": "noop"}
+
+        msg_obj = {"role": response["role"]}
+        if response.get("content"):
+            msg_obj["content"] = response["content"]
+        if response.get("tool_calls"):
+            msg_obj["tool_calls"] = response["tool_calls"]
+        agent.messages.append(msg_obj)
+        return response
 
 
 class OrchestratorEventLoopTests(unittest.IsolatedAsyncioTestCase):
@@ -178,6 +228,55 @@ class OrchestratorEventLoopTests(unittest.IsolatedAsyncioTestCase):
         token_text = "".join(e.get("content", "") for e in events if e.get("type") == "token")
         self.assertIn("Harper says hi and number 7.", token_text)
         self.assertEqual(events[-1]["type"], "done")
+
+    async def test_leader_wait_message_is_not_final_with_pending_agents(self):
+        orch = DelayedCollaborationOrchestrator([
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": "l1",
+                        "type": "function",
+                        "function": {
+                            "name": "chatroom_send",
+                            "arguments": json.dumps({"to": ["Harper", "Benjamin"], "message": "greet and guess"}),
+                        },
+                    }
+                ],
+            },
+            {"role": "assistant", "content": "Принято. Ожидаю ответ от Бенджамина."},
+            {"role": "assistant", "content": "Готово, получил ответы от всех."},
+        ])
+
+        result = await orch.run("попроси двух агентов")
+        self.assertEqual(result, "Готово, получил ответы от всех.")
+
+    async def test_stream_leader_wait_message_is_not_final_with_pending_agents(self):
+        orch = DelayedCollaborationOrchestrator([
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": "l1",
+                        "type": "function",
+                        "function": {
+                            "name": "chatroom_send",
+                            "arguments": json.dumps({"to": ["Harper", "Benjamin"], "message": "greet and guess"}),
+                        },
+                    }
+                ],
+            },
+            {"role": "assistant", "content": "Принято. Ожидаю ответ от Бенджамина."},
+            {"role": "assistant", "content": "Готово, получил ответы от всех."},
+        ])
+
+        events = []
+        async for event in orch.run_stream("попроси двух агентов", require_title_tool=False):
+            events.append(event)
+
+        token_text = "".join(e.get("content", "") for e in events if e.get("type") == "token")
+        self.assertIn("Готово, получил ответы от всех.", token_text)
+
 
 
 if __name__ == "__main__":
