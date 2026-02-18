@@ -317,7 +317,7 @@ class Orchestrator:
         """
         Execute a collaborator's step and yield SSE events.
         """
-        if depth > 2:
+        if depth > 4:
             yield {"type": "thought", "agent": agent.name, "content": "Max recursion depth reached."}
             return
 
@@ -329,6 +329,8 @@ class Orchestrator:
             yield {"type": "thought", "agent": agent.name, "content": content}
 
         if tool_calls:
+            should_continue = False
+            saw_wait = False
             for tool_call in tool_calls:
                 func_name = tool_call["function"]["name"]
 
@@ -338,9 +340,17 @@ class Orchestrator:
                 elif func_name == "wait":
                     yield {"type": "wait", "agent": agent.name}
                     agent.add_tool_call_result(tool_call["id"], "Waited.", "wait")
+                    saw_wait = True
                 else:
                     async for ev in self._handle_tool_call_stream(agent, tool_call):
                         yield ev
+                    should_continue = True
+
+            # Collaborators need another reasoning step after tool outputs (e.g. web_search)
+            # so they can summarize findings and send them back to the leader.
+            if not saw_wait and should_continue:
+                async for ev in self._run_agent_step_with_logic_stream(agent, depth + 1):
+                    yield ev
 
     # ── Original (non-streaming) helpers ──
 
@@ -471,7 +481,7 @@ class Orchestrator:
         """
         Executes a Collaborator's step logic (Think -> Output/Tool) Asynchronously.
         """
-        if depth > 2: 
+        if depth > 4: 
             return "Error: Max recursion depth for collaborator."
             
         response = await self._run_agent(agent)
@@ -483,7 +493,8 @@ class Orchestrator:
              print(f"[Orchestrator Log] {agent.name} says/thinks: {content}")
         
         if tool_calls:
-            results = []
+            should_continue = False
+            saw_wait = False
             for tool_call in tool_calls:
                 func_name = tool_call["function"]["name"]
                 
@@ -492,8 +503,15 @@ class Orchestrator:
                     # No need to return anything, message is enqueued
                 elif func_name == "wait":
                     agent.add_tool_call_result(tool_call["id"], "Waited.", "wait")
+                    saw_wait = True
                 else:
                     await self._handle_tool_call(agent, tool_call)
+                    should_continue = True
+
+            # Let collaborators consume non-chatroom tool results and produce
+            # a follow-up message for the leader in the same collaboration round.
+            if not saw_wait and should_continue:
+                return await self._run_agent_step_with_logic(agent, depth + 1)
             return None
         
         return None
