@@ -53,18 +53,11 @@ class ScriptedOrchestrator(Orchestrator):
         return response
 
     async def _handle_tool_call(self, caller, tool_call):
-        func_name = tool_call["function"]["name"]
-        if func_name == "chatroom_send":
-            args = json.loads(tool_call["function"]["arguments"])
-            target = args.get("to")
-            message = args.get("message", "")
-            if target in self.agents:
-                self.agents[target].mailbox.append({"from": caller.name, "content": message})
-        caller.add_tool_call_result(tool_call.get("id", "id"), "ok", func_name)
+        await Orchestrator._handle_tool_call(self, caller, tool_call)
 
     async def _handle_tool_call_stream(self, caller, tool_call):
-        await self._handle_tool_call(caller, tool_call)
-        yield {"type": "tool_use", "agent": caller.name, "tool": tool_call["function"]["name"]}
+        async for ev in Orchestrator._handle_tool_call_stream(self, caller, tool_call):
+            yield ev
 
 
 class OrchestratorEventLoopTests(unittest.IsolatedAsyncioTestCase):
@@ -116,6 +109,26 @@ class OrchestratorEventLoopTests(unittest.IsolatedAsyncioTestCase):
         token_text = "".join(e.get("content", "") for e in events if e.get("type") == "token")
         self.assertIn("Привет!", token_text)
         self.assertEqual(events[-1]["type"], "done")
+
+
+    async def test_non_leader_chatroom_send_can_reach_peer_agent(self):
+        orch = ScriptedOrchestrator([])
+        harper = orch.agents["Harper"]
+
+        await orch._handle_tool_call(
+            harper,
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {
+                    "name": "chatroom_send",
+                    "arguments": json.dumps({"to": "Benjamin", "message": "please validate"}),
+                },
+            },
+        )
+
+        self.assertEqual(len(orch.agents["Benjamin"].mailbox), 1)
+        self.assertEqual(orch.agents["Benjamin"].mailbox[0]["from"], "Harper")
 
     async def test_run_resumes_when_agent_reply_arrives(self):
         orch = ScriptedOrchestrator([

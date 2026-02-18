@@ -48,7 +48,8 @@ class Orchestrator:
                 if content:
                     print(f"[Orchestrator Log] {leader.name} says/thinks: {content}")
 
-                if not tool_calls and content and not active_tasks and not self._has_pending_agent_mailboxes():
+                if not tool_calls and content:
+                    await self._cancel_active_tasks(active_tasks)
                     return content
 
                 for tool_call in tool_calls:
@@ -129,7 +130,8 @@ class Orchestrator:
                 if content:
                     yield {"type": "thought", "agent": leader.name, "content": content}
 
-                if not tool_calls and content and not active_tasks and not self._has_pending_agent_mailboxes():
+                if not tool_calls and content:
+                    await self._cancel_active_tasks(active_tasks)
                     for i, word in enumerate(content.split(" ")):
                         yield {"type": "token", "content": word if i == 0 else f" {word}"}
                         await asyncio.sleep(0.02)
@@ -168,6 +170,20 @@ class Orchestrator:
 
         yield {"type": "token", "content": "Error: Session budget reached without final answer."}
         yield {"type": "done"}
+
+    async def _cancel_active_tasks(self, active_tasks: Dict[str, asyncio.Task]) -> None:
+        if not active_tasks:
+            return
+
+        tasks = list(active_tasks.values())
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+        active_tasks.clear()
 
     def _launch_ready_agents(self, active_tasks: Dict[str, asyncio.Task], stream_mode: bool = False) -> None:
         for name, agent in self.agents.items():
@@ -481,7 +497,9 @@ class Orchestrator:
         return (
             "ASYNCHRONOUS COLLABORATION POLICY:\n"
             "- You are running in an event-driven live-flow team.\n"
-            "- As soon as you have a useful partial or final result, send it to LEADER via chatroom_send immediately.\n"
+            "- Primary route is AGENT -> LEADER. Send useful partial/final results to LEADER via chatroom_send immediately.\n"
+            "- You MAY ask another non-leader agent only when you are blocked, uncertain, or need quick validation of your result.\n"
+            "- If you ask another agent, keep it short and then send the consolidated update to LEADER.\n"
             "- Do not accumulate large internal debates; prioritize incremental delivery.\n"
             "- If tools were used, synthesize and send a concise actionable update to LEADER.\n"
             "- Your local execution history follows (messages, your tool calls/results):\n"
