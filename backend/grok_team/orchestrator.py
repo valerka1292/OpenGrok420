@@ -57,8 +57,9 @@ class Orchestrator:
                         await self._handle_tool_call(leader, tool_call)
 
                 if delegated_targets:
+                    wait_timeout = self._extract_wait_timeout(tool_calls)
                     await self._process_collaboration_loop(
-                        timeout_seconds=None,
+                        timeout_seconds=wait_timeout,
                         expected_senders=delegated_targets,
                     )
                     incoming = self._collect_leader_mailbox(leader)
@@ -129,13 +130,14 @@ class Orchestrator:
                             yield ev
 
                 if delegated_targets:
+                    wait_timeout = self._extract_wait_timeout(tool_calls)
                     yield {
                         "type": "status",
                         "content": "Leader delegated tasks; waiting targeted replies from: " + ", ".join(sorted(delegated_targets)),
                     }
 
                     async for ev in self._process_collaboration_loop_stream(
-                        timeout_seconds=None,
+                        timeout_seconds=wait_timeout,
                         expected_senders=delegated_targets,
                     ):
                         yield ev
@@ -265,14 +267,7 @@ class Orchestrator:
 
             active_agents = [agent for name, agent in self.agents.items() if name != LEADER_NAME and agent.mailbox]
             if not active_agents:
-                if expected_senders and not self._expected_senders_replied(expected_senders):
-                    active_agents = [
-                        self.agents[name]
-                        for name in expected_senders
-                        if name in self.agents and name != LEADER_NAME
-                    ]
-                if not active_agents:
-                    break
+                break
 
             for agent in active_agents:
                 while agent.mailbox:
@@ -335,36 +330,6 @@ class Orchestrator:
                 }
                 break
 
-                if done_count == len(tasks):
-                    break
-
-                remaining = self._remaining_time(deadline)
-                if remaining is not None and remaining <= 0:
-                    timeout_triggered = True
-                    break
-
-                step_timeout = 0.1 if remaining is None else max(0.01, min(0.1, remaining))
-                await asyncio.wait(tasks, timeout=step_timeout)
-
-            while not queue.empty():
-                yield await queue.get()
-
-            for task in tasks:
-                if task.done() and task.exception():
-                    yield {"type": "thought", "agent": "orchestrator", "content": f"Error: {task.exception()}"}
-
-            if timeout_triggered:
-                pending = [task for task in tasks if not task.done()]
-                for task in pending:
-                    task.cancel()
-                if pending:
-                    await asyncio.gather(*pending, return_exceptions=True)
-                yield {
-                    "type": "status",
-                    "content": "Collaboration wait timed out before all teammates finished.",
-                }
-                break
-
             if expected_senders and self._expected_senders_replied(expected_senders):
                 yield {
                     "type": "status",
@@ -407,12 +372,8 @@ class Orchestrator:
                 processed_calls += 1
                 if func_name == "wait":
                     yield {"type": "wait", "agent": agent.name}
-                    agent.add_tool_call_result(
-                        tool_call["id"],
-                        "Wait acknowledged. Continue and send a concrete update to LEADER.",
-                        "wait",
-                    )
-                    should_continue = True
+                    agent.add_tool_call_result(tool_call["id"], "Waited.", "wait")
+                    saw_wait = True
                     continue
 
                 async for ev in self._handle_tool_call_stream(agent, tool_call):
@@ -516,14 +477,7 @@ class Orchestrator:
 
             active_agents = [agent for name, agent in self.agents.items() if name != LEADER_NAME and agent.mailbox]
             if not active_agents:
-                if expected_senders and not self._expected_senders_replied(expected_senders):
-                    active_agents = [
-                        self.agents[name]
-                        for name in expected_senders
-                        if name in self.agents and name != LEADER_NAME
-                    ]
-                if not active_agents:
-                    break
+                break
 
             for agent in active_agents:
                 while agent.mailbox:
@@ -596,12 +550,8 @@ class Orchestrator:
                 if func_name == "chatroom_send":
                     await self._handle_tool_call(agent, tool_call)
                 elif func_name == "wait":
-                    agent.add_tool_call_result(
-                        tool_call["id"],
-                        "Wait acknowledged. Continue and send a concrete update to LEADER.",
-                        "wait",
-                    )
-                    should_continue = True
+                    agent.add_tool_call_result(tool_call["id"], "Waited.", "wait")
+                    saw_wait = True
                 else:
                     await self._handle_tool_call(agent, tool_call)
                     should_continue = True
