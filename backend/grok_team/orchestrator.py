@@ -5,7 +5,7 @@ import asyncio
 from typing import Dict, List, Any, Optional, AsyncGenerator
 from grok_team.config import LEADER_NAME, COLLABORATOR_NAMES, ALL_AGENT_NAMES
 from grok_team.agent import Agent
-from grok_team.tools import execute_web_search
+from grok_team.tools import execute_web_search, execute_python_run
 
 class Orchestrator:
     def __init__(self):
@@ -238,6 +238,20 @@ class Orchestrator:
             except Exception as e:
                 caller.add_tool_call_result(tool_call_id, f"Error performing search: {str(e)}", func_name)
 
+        elif func_name == "python_run":
+            code = args.get("code")
+            if not isinstance(code, str) or not code.strip():
+                caller.add_tool_call_result(tool_call_id, "Error: code must be a non-empty string.", func_name)
+                return
+
+            yield {
+                "type": "tool_use",
+                "agent": caller.name,
+                "tool": "python_run",
+            }
+            output = await execute_python_run(code)
+            caller.add_tool_call_result(tool_call_id, output, func_name)
+
         elif func_name != "wait":
             caller.add_tool_call_result(tool_call_id, f"Error: Tool {func_name} not found.", func_name)
 
@@ -403,6 +417,15 @@ class Orchestrator:
                 caller.add_tool_call_result(tool_call_id, output, func_name)
             except Exception as e:
                 caller.add_tool_call_result(tool_call_id, f"Error performing search: {str(e)}", func_name)
+
+        elif func_name == "python_run":
+            code = args.get("code")
+            if not isinstance(code, str) or not code.strip():
+                caller.add_tool_call_result(tool_call_id, "Error: code must be a non-empty string.", func_name)
+                return
+
+            output = await execute_python_run(code)
+            caller.add_tool_call_result(tool_call_id, output, func_name)
 
         elif func_name != "wait":
             caller.add_tool_call_result(tool_call_id, f"Error: Tool {func_name} not found.", func_name)

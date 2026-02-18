@@ -1,6 +1,11 @@
 
+import asyncio
+import pkgutil
+import subprocess
+import sys
+from typing import List, Union, Dict, Any
+
 import aiohttp
-from typing import List, Optional, Union, Dict, Any
 
 # Tool Definitions as Dictionaries (compatible with OpenAI function calling)
 # Correct format: {"type": "function", "function": {...}}
@@ -82,11 +87,47 @@ WEB_SEARCH_FUNCTION = {
     }
 }
 
+
+def _get_non_system_modules() -> List[str]:
+    """Collect non-stdlib module names available in the current Python environment."""
+    stdlib_modules = set(getattr(sys, "stdlib_module_names", set()))
+    available_modules = {
+        module.name
+        for module in pkgutil.iter_modules()
+        if module.name not in stdlib_modules and not module.name.startswith("_")
+    }
+    return sorted(available_modules)
+
+
+_NON_SYSTEM_MODULES = _get_non_system_modules()
+_MODULES_DESCRIPTION = ", ".join(_NON_SYSTEM_MODULES) if _NON_SYSTEM_MODULES else "None"
+
+
+PYTHON_RUN_FUNCTION = {
+    "name": "python_run",
+    "description": (
+        "Execute Python code via `python -c` and return stdout/stderr. "
+        "Available non-system modules detected automatically: "
+        f"{_MODULES_DESCRIPTION}."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "code": {
+                "description": "Python code to execute using `python -c`.",
+                "type": "string"
+            }
+        },
+        "required": ["code"]
+    }
+}
+
 ALL_TOOLS = [
     {"type": "function", "function": CHATROOM_SEND_FUNCTION},
     {"type": "function", "function": WAIT_FUNCTION},
     {"type": "function", "function": WEB_SEARCH_FUNCTION},
-    {"type": "function", "function": SET_CONVERSATION_TITLE_FUNCTION}
+    {"type": "function", "function": SET_CONVERSATION_TITLE_FUNCTION},
+    {"type": "function", "function": PYTHON_RUN_FUNCTION}
 ]
 
 # Python Implementations (for execution handling)
@@ -132,3 +173,31 @@ async def execute_web_search(query: str, num_results: int = 10) -> List[Dict[str
             else:
                 # Fallback or error
                 raise Exception(f"Search engine returned status {resp.status}")
+
+
+async def execute_python_run(code: str) -> str:
+    """Execute Python code using `python -c` and return formatted execution output."""
+
+    def _run() -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+
+    try:
+        result = await asyncio.to_thread(_run)
+    except subprocess.TimeoutExpired:
+        return "Error: Python execution timed out after 30 seconds."
+    except Exception as exc:
+        return f"Error executing python: {exc}"
+
+    stdout = result.stdout.strip() or "<empty>"
+    stderr = result.stderr.strip() or "<empty>"
+    return (
+        f"Return code: {result.returncode}\n"
+        f"STDOUT:\n{stdout}\n\n"
+        f"STDERR:\n{stderr}"
+    )
