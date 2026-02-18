@@ -1,11 +1,39 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Menu } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import ChatArea from './components/ChatArea';
 import InputArea from './components/InputArea';
 
+const HEALTHCHECK_INTERVAL_MS = 30000;
+
 export default function App() {
     const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+    const [isBackendOnline, setIsBackendOnline] = useState<boolean | null>(null);
+
+    useEffect(() => {
+        let isMounted = true;
+
+        const checkHealth = async () => {
+            try {
+                const response = await fetch('/api/health');
+                if (!isMounted) return;
+                setIsBackendOnline(response.ok);
+            } catch {
+                if (!isMounted) return;
+                setIsBackendOnline(false);
+            }
+        };
+
+        void checkHealth();
+        const timer = window.setInterval(() => {
+            void checkHealth();
+        }, HEALTHCHECK_INTERVAL_MS);
+
+        return () => {
+            isMounted = false;
+            window.clearInterval(timer);
+        };
+    }, []);
 
     return (
         <div className="flex h-screen bg-bg-body text-text-primary overflow-hidden font-sans selection:bg-accent-blue/30">
@@ -20,13 +48,21 @@ export default function App() {
             )}
 
             <aside className={`${isSidebarOpen ? 'w-[300px]' : 'w-0'} transition-all duration-300 ease-in-out relative flex-shrink-0 border-r border-border-subtle bg-bg-sidebar hidden md:block`}>
-                <Sidebar isOpen={isSidebarOpen} toggle={() => setIsSidebarOpen(!isSidebarOpen)} />
+                <Sidebar
+                    isOpen={isSidebarOpen}
+                    toggle={() => setIsSidebarOpen(!isSidebarOpen)}
+                    isBackendOnline={isBackendOnline}
+                />
             </aside>
 
             {isSidebarOpen && (
                 <div className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm md:hidden" onClick={() => setIsSidebarOpen(false)}>
                     <div className="absolute left-0 top-0 bottom-0 w-[300px] bg-bg-sidebar border-r border-border-subtle" onClick={(e) => e.stopPropagation()}>
-                        <Sidebar isOpen={isSidebarOpen} toggle={() => setIsSidebarOpen(false)} />
+                        <Sidebar
+                            isOpen={isSidebarOpen}
+                            toggle={() => setIsSidebarOpen(false)}
+                            isBackendOnline={isBackendOnline}
+                        />
                     </div>
                 </div>
             )}

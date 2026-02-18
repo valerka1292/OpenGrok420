@@ -1,8 +1,9 @@
-import { History, MessageSquarePlus, PanelLeftClose, Search } from 'lucide-react';
+import { History, MessageSquarePlus, PanelLeftClose, Search, Wifi, WifiOff } from 'lucide-react';
 
 interface SidebarProps {
     isOpen: boolean;
     toggle: () => void;
+    isBackendOnline: boolean | null;
 }
 
 const RECENT = [
@@ -11,7 +12,7 @@ const RECENT = [
     'UI/UX ревью и roadmap',
 ];
 
-export default function Sidebar({ isOpen, toggle }: SidebarProps) {
+export default function Sidebar({ isOpen, toggle, isBackendOnline }: SidebarProps) {
     return (
         <div className="flex flex-col h-full p-4">
             <div className="flex items-center justify-between mb-6 px-2">
@@ -24,6 +25,21 @@ export default function Sidebar({ isOpen, toggle }: SidebarProps) {
                 <button onClick={toggle} className="text-text-muted hover:text-text-primary transition-colors" aria-label="Свернуть панель">
                     <PanelLeftClose size={20} />
                 </button>
+            </div>
+
+            <div className="mb-4 px-2">
+                <div
+                    className={`inline-flex w-full items-center justify-between rounded-xl border px-3 py-2 text-xs ${isBackendOnline === false
+                        ? 'border-red-500/35 bg-red-500/10 text-red-200'
+                        : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+                        }`}
+                >
+                    <span className="font-medium">Backend</span>
+                    <span className="inline-flex items-center gap-1.5">
+                        {isBackendOnline === false ? <WifiOff size={13} /> : <Wifi size={13} />}
+                        {isBackendOnline === null ? 'Проверка…' : isBackendOnline ? 'Online' : 'Offline'}
+                    </span>
+                </div>
             </div>
 
             <div className="space-y-2 mb-6">

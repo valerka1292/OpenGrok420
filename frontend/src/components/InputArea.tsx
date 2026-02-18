@@ -3,6 +3,18 @@ import { AlertCircle, LoaderCircle, Send, SlidersHorizontal, Sparkles, Square, T
 import useChat from '../store/useChat';
 import SettingsModal from './SettingsModal';
 
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.trim() || '';
+
+const parseNdjsonChunk = (rawLine: string) => {
+    const line = rawLine.trim();
+    if (!line) return null;
+
+    const payload = line.startsWith('data:') ? line.slice(5).trim() : line;
+    if (!payload) return null;
+
+    return JSON.parse(payload);
+};
+
 export default function InputArea() {
     const [input, setInput] = useState('');
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -53,7 +65,7 @@ export default function InputArea() {
         abortControllerRef.current = controller;
 
         try {
-            const response = await fetch('/api/chat', {
+            const response = await fetch(`${API_BASE_URL}/api/chat`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 signal: controller.signal,
@@ -64,7 +76,13 @@ export default function InputArea() {
             });
 
             if (!response.ok) {
-                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                let details = '';
+                try {
+                    details = await response.text();
+                } catch {
+                    details = '';
+                }
+                throw new Error(`HTTP ${response.status}: ${response.statusText}${details ? ` — ${details}` : ''}`);
             }
 
             if (!response.body) {
@@ -85,7 +103,10 @@ export default function InputArea() {
 
                 for (const line of lines) {
                     try {
-                        handleStreamEvent(JSON.parse(line));
+                        const event = parseNdjsonChunk(line);
+                        if (event) {
+                            handleStreamEvent(event);
+                        }
                     } catch {
                         // keep stream alive even with malformed lines
                     }
@@ -95,7 +116,10 @@ export default function InputArea() {
             const tail = buffer.trim();
             if (tail) {
                 try {
-                    handleStreamEvent(JSON.parse(tail));
+                    const event = parseNdjsonChunk(tail);
+                    if (event) {
+                        handleStreamEvent(event);
+                    }
                 } catch {
                     // ignored
                 }
