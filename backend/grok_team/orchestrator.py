@@ -255,7 +255,7 @@ class Orchestrator:
         """Parallel collaboration loop that yields SSE events."""
         deadline = self._compute_deadline(timeout_seconds)
         round_count = 0
-        while round_count < self.MAX_PROPAGATION_ROUNDS:
+        while True:
             if self._deadline_expired(deadline):
                 yield {
                     "type": "status",
@@ -263,11 +263,29 @@ class Orchestrator:
                 }
                 break
 
+            if round_count >= self.MAX_PROPAGATION_ROUNDS:
+                waiting_expected = bool(expected_senders and not self._expected_senders_replied(expected_senders))
+                if not waiting_expected:
+                    break
+
             round_count += 1
 
             active_agents = [agent for name, agent in self.agents.items() if name != LEADER_NAME and agent.mailbox]
             if not active_agents:
-                break
+                if expected_senders and not self._expected_senders_replied(expected_senders):
+                    missing = self._missing_expected_senders(expected_senders)
+                    if not missing:
+                        break
+                    self._nudge_expected_senders(missing)
+                    yield {
+                        "type": "status",
+                        "content": "Waiting for pending replies from: " + ", ".join(sorted(missing)),
+                    }
+                    active_agents = [agent for name, agent in self.agents.items() if name != LEADER_NAME and agent.mailbox]
+                    if not active_agents:
+                        break
+                else:
+                    break
 
             for agent in active_agents:
                 while agent.mailbox:
@@ -461,15 +479,29 @@ class Orchestrator:
         """Async propagation loop using parallel collaborator execution."""
         deadline = self._compute_deadline(timeout_seconds)
         round_count = 0
-        while round_count < self.MAX_PROPAGATION_ROUNDS:
+        while True:
             if self._deadline_expired(deadline):
                 break
+
+            if round_count >= self.MAX_PROPAGATION_ROUNDS:
+                waiting_expected = bool(expected_senders and not self._expected_senders_replied(expected_senders))
+                if not waiting_expected:
+                    break
 
             round_count += 1
 
             active_agents = [agent for name, agent in self.agents.items() if name != LEADER_NAME and agent.mailbox]
             if not active_agents:
-                break
+                if expected_senders and not self._expected_senders_replied(expected_senders):
+                    missing = self._missing_expected_senders(expected_senders)
+                    if not missing:
+                        break
+                    self._nudge_expected_senders(missing)
+                    active_agents = [agent for name, agent in self.agents.items() if name != LEADER_NAME and agent.mailbox]
+                    if not active_agents:
+                        break
+                else:
+                    break
 
             for agent in active_agents:
                 while agent.mailbox:
@@ -643,11 +675,28 @@ class Orchestrator:
         return targets
 
     def _expected_senders_replied(self, expected_senders: set[str]) -> bool:
+        return len(self._missing_expected_senders(expected_senders)) == 0
+
+    def _missing_expected_senders(self, expected_senders: set[str]) -> set[str]:
         if not expected_senders:
-            return True
+            return set()
         leader_mailbox = self.agents[LEADER_NAME].mailbox
         received = {str(msg.get("from")) for msg in leader_mailbox if msg.get("from") in expected_senders}
-        return expected_senders.issubset(received)
+        return expected_senders - received
+
+    def _nudge_expected_senders(self, missing_senders: set[str]) -> None:
+        for sender_name in missing_senders:
+            if sender_name not in self.agents or sender_name == LEADER_NAME:
+                continue
+            self.agents[sender_name].mailbox.append(
+                {
+                    "from": "Orchestrator",
+                    "content": (
+                        "LEADER is explicitly waiting for your final update. "
+                        "Send one concise, evidence-based answer to LEADER via chatroom_send now."
+                    ),
+                }
+            )
 
     def _extract_wait_timeout(self, tool_calls: List[Dict[str, Any]]) -> int:
         timeout = self.DEFAULT_WAIT_TIMEOUT_SECONDS
