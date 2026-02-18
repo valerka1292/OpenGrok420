@@ -1,11 +1,13 @@
-import { useState } from 'react';
-import { Send, Square, SlidersHorizontal, Sparkles } from 'lucide-react';
+import { useMemo, useRef, useState } from 'react';
+import { AlertCircle, LoaderCircle, Send, SlidersHorizontal, Sparkles, Square, Trash2 } from 'lucide-react';
 import useChat from '../store/useChat';
 import SettingsModal from './SettingsModal';
 
 export default function InputArea() {
-    const [input, setInput] = useState("");
+    const [input, setInput] = useState('');
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+    const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const abortControllerRef = useRef<AbortController | null>(null);
 
     const {
         addUserMessage,
@@ -14,30 +16,60 @@ export default function InputArea() {
         isGenerating,
         stopGeneration,
         temperature,
-        setAgentTemperature
+        setAgentTemperature,
+        currentStatus,
+        lastError,
+        clearMessages,
     } = useChat();
+
+    const canSubmit = useMemo(() => input.trim().length > 0 && !isGenerating, [input, isGenerating]);
+
+    const handleInputChange = (value: string) => {
+        setInput(value);
+        if (!textareaRef.current) return;
+        textareaRef.current.style.height = '68px';
+        textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 220)}px`;
+    };
+
+    const handleStop = () => {
+        abortControllerRef.current?.abort();
+        stopGeneration('Поток остановлен пользователем');
+    };
 
     const handleSubmit = async (e: React.FormEvent | React.KeyboardEvent) => {
         e.preventDefault();
-        if (!input.trim() || isGenerating) return;
+        if (!canSubmit) return;
 
-        const userMsg = input;
-        setInput("");
+        const userMsg = input.trim();
+        setInput('');
+        if (textareaRef.current) {
+            textareaRef.current.style.height = '68px';
+        }
+
         addUserMessage(userMsg);
         startGeneration();
 
+        const controller = new AbortController();
+        abortControllerRef.current = controller;
+
         try {
-            // Connect to existing backend at /api/chat
             const response = await fetch('/api/chat', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
+                signal: controller.signal,
                 body: JSON.stringify({
                     message: userMsg,
-                    temperatures: temperature
+                    temperatures: temperature,
                 }),
             });
 
-            if (!response.body) throw new Error("No response body");
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+
+            if (!response.body) {
+                throw new Error('Пустой поток ответа от сервера');
+            }
 
             const reader = response.body.getReader();
             const decoder = new TextDecoder();
@@ -49,33 +81,38 @@ export default function InputArea() {
 
                 buffer += decoder.decode(value, { stream: true });
                 const lines = buffer.split('\n');
-                buffer = lines.pop() || ''; // Keep incomplete line
+                buffer = lines.pop() ?? '';
 
                 for (const line of lines) {
-                    if (!line.trim()) continue;
                     try {
-                        // Parse NDJSON directly
-                        const data = JSON.parse(line);
-                        handleStreamEvent(data);
-                    } catch (err) {
-                        console.warn("JSON Parse Error", err, line);
+                        handleStreamEvent(JSON.parse(line));
+                    } catch {
+                        // keep stream alive even with malformed lines
                     }
                 }
             }
 
-            // Process remaining buffer
-            if (buffer.trim()) {
+            const tail = buffer.trim();
+            if (tail) {
                 try {
-                    const data = JSON.parse(buffer);
-                    handleStreamEvent(data);
-                } catch (e) { }
+                    handleStreamEvent(JSON.parse(tail));
+                } catch {
+                    // ignored
+                }
             }
 
             handleStreamEvent({ type: 'done' });
-
         } catch (error) {
-            console.error("Stream Error", error);
+            if (error instanceof DOMException && error.name === 'AbortError') {
+                handleStreamEvent({ type: 'done' });
+                return;
+            }
+
+            const message = error instanceof Error ? error.message : 'Не удалось подключиться к backend';
+            handleStreamEvent({ type: 'error', content: message });
             handleStreamEvent({ type: 'done' });
+        } finally {
+            abortControllerRef.current = null;
         }
     };
 
@@ -88,25 +125,49 @@ export default function InputArea() {
                 setAgentTemperature={setAgentTemperature}
             />
 
-            <div className="p-4 bg-gradient-to-t from-bg-body via-bg-body to-transparent z-10 w-full max-w-4xl mx-auto">
+            <div className="p-4 pt-2 bg-gradient-to-t from-bg-body via-bg-body to-transparent z-10 w-full max-w-5xl mx-auto">
+                <div className="mb-3 flex items-center justify-between gap-3 text-xs px-2">
+                    <div className="inline-flex items-center gap-2 text-text-muted">
+                        {isGenerating ? <LoaderCircle size={13} className="animate-spin" /> : <Sparkles size={13} />}
+                        <span className="truncate">{currentStatus}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        {lastError && (
+                            <span className="inline-flex items-center gap-1 text-red-300 bg-red-500/10 px-2 py-1 rounded-md border border-red-500/30">
+                                <AlertCircle size={12} />
+                                Ошибка ответа
+                            </span>
+                        )}
+                        <button
+                            type="button"
+                            onClick={clearMessages}
+                            className="inline-flex items-center gap-1 text-text-muted hover:text-text-primary px-2 py-1 rounded-md hover:bg-white/5"
+                            title="Очистить диалог"
+                        >
+                            <Trash2 size={12} />
+                            Очистить
+                        </button>
+                    </div>
+                </div>
+
                 <form
                     onSubmit={handleSubmit}
-                    className="relative bg-bg-surface/80 backdrop-blur-xl rounded-2xl border border-border-subtle shadow-xl transition-all duration-300 focus-within:border-accent-blue/30 focus-within:ring-1 focus-within:ring-accent-blue/30 hover:border-text-muted/30"
+                    className="relative bg-bg-surface/85 backdrop-blur-2xl rounded-2xl border border-border-subtle shadow-xl transition-all duration-300 focus-within:border-accent-blue/35 focus-within:ring-1 focus-within:ring-accent-blue/20 hover:border-text-muted/30"
                 >
                     <textarea
+                        ref={textareaRef}
                         value={input}
-                        onChange={(e) => setInput(e.target.value)}
+                        onChange={(e) => handleInputChange(e.target.value)}
                         onKeyDown={(e) => {
                             if (e.key === 'Enter' && !e.shiftKey) {
                                 e.preventDefault();
-                                handleSubmit(e);
+                                void handleSubmit(e);
                             }
                         }}
-                        placeholder="Спросите Grok Team..."
-                        className="w-full bg-transparent text-text-primary p-4 pr-14 pl-12 focus:outline-none resize-none h-[68px] max-h-[200px] leading-relaxed placeholder:text-text-muted/60"
+                        placeholder="Спросите Grok Team... (Enter — отправить, Shift+Enter — новая строка)"
+                        className="w-full bg-transparent text-text-primary p-4 pr-14 pl-12 focus:outline-none resize-none h-[68px] max-h-[220px] leading-relaxed placeholder:text-text-muted/60"
                     />
 
-                    {/* Left Actions: Settings */}
                     <div className="absolute bottom-3 left-3">
                         <button
                             type="button"
@@ -118,23 +179,22 @@ export default function InputArea() {
                         </button>
                     </div>
 
-                    {/* Right Actions: Send/Stop */}
                     <div className="absolute bottom-3 right-3 flex items-center gap-2">
                         {!isGenerating ? (
                             <button
                                 type="submit"
-                                disabled={!input.trim()}
-                                className={`w-9 h-9 flex items-center justify-center rounded-lg transition-all duration-200 ${input.trim()
-                                        ? 'bg-text-primary text-bg-body hover:bg-white/90 shadow-lg shadow-white/10'
-                                        : 'bg-white/5 text-text-muted cursor-not-allowed'
+                                disabled={!canSubmit}
+                                className={`w-9 h-9 flex items-center justify-center rounded-lg transition-all duration-200 ${canSubmit
+                                    ? 'bg-text-primary text-bg-body hover:bg-white/90 shadow-lg shadow-white/10'
+                                    : 'bg-white/5 text-text-muted cursor-not-allowed'
                                     }`}
                             >
-                                <Send size={18} className={input.trim() ? "ml-0.5" : ""} />
+                                <Send size={18} className={canSubmit ? 'ml-0.5' : ''} />
                             </button>
                         ) : (
                             <button
                                 type="button"
-                                onClick={stopGeneration}
+                                onClick={handleStop}
                                 className="w-9 h-9 flex items-center justify-center rounded-lg bg-text-primary text-bg-body hover:bg-white/90 shadow-lg shadow-white/10 animate-in zoom-in-50 duration-200"
                             >
                                 <Square size={14} fill="currentColor" />
@@ -145,7 +205,7 @@ export default function InputArea() {
 
                 <div className="flex items-center justify-center gap-2 mt-4 text-[10px] uppercase tracking-widest text-text-muted font-medium opacity-60">
                     <Sparkles size={10} />
-                    <span>Grok 4.20 Beta</span>
+                    <span>Grok 4.20 Beta · Streaming NDJSON</span>
                 </div>
             </div>
         </>
