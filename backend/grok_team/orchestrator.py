@@ -296,6 +296,44 @@ class Orchestrator:
 
                 while not queue.empty():
                     yield await queue.get()
+                if pending:
+                    break
+            else:
+                done_tasks = set()
+                while len(done_tasks) < len(tasks):
+                    for task in tasks:
+                        if task.done() and task not in done_tasks:
+                            done_tasks.add(task)
+
+                if done_count == len(tasks):
+                    break
+
+                remaining = self._remaining_time(deadline)
+                if remaining is not None and remaining <= 0:
+                    timeout_triggered = True
+                    break
+
+                step_timeout = 0.1 if remaining is None else max(0.01, min(0.1, remaining))
+                await asyncio.wait(tasks, timeout=step_timeout)
+
+                    if len(done_tasks) < len(tasks):
+                        await asyncio.sleep(0.05)
+
+            for task in tasks:
+                if task.done() and task.exception():
+                    yield {"type": "thought", "agent": "orchestrator", "content": f"Error: {task.exception()}"}
+
+            if timeout_triggered:
+                pending = [task for task in tasks if not task.done()]
+                for task in pending:
+                    task.cancel()
+                if pending:
+                    await asyncio.gather(*pending, return_exceptions=True)
+                yield {
+                    "type": "status",
+                    "content": "Collaboration wait timed out before all teammates finished.",
+                }
+                break
 
                 if done_count == len(tasks):
                     break
