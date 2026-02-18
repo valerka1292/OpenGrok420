@@ -28,17 +28,10 @@
 },
 {
   "name": "wait",
-  "description": "Wait for a teammate's message or an async tool to return. There is a global timeout of 200.0s across all requests to this tool and a hard limit of 120.0s for each request to this tool.",
+  "description": "No-op waiting signal. Use this when you have already delegated tasks and are waiting for teammates. This tool has no arguments and no payload result.",
   "parameters": {
-    "properties": {
-      "timeout": {
-        "default": 10,
-        "description": "The maximum amount of time in seconds to wait.",
-        "maximum": 120,
-        "minimum": 1,
-        "type": "integer"
-      }
-    },
-    "type": "object"
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
   }
 }
