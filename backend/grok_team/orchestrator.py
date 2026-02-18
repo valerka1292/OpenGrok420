@@ -50,13 +50,31 @@ class Orchestrator:
 
             if tool_calls:
                 is_waiting = any(tc["function"]["name"] == "wait" for tc in tool_calls)
-                sent_chatroom = any(tc["function"]["name"] == "chatroom_send" for tc in tool_calls)
+                delegated_targets = self._extract_chatroom_targets(leader, tool_calls)
 
                 for tool_call in tool_calls:
                     if tool_call["function"]["name"] != "wait":
                         await self._handle_tool_call(leader, tool_call)
 
-                if is_waiting:
+                if delegated_targets:
+                    wait_timeout = self._extract_wait_timeout(tool_calls)
+                    await self._process_collaboration_loop(
+                        timeout_seconds=wait_timeout,
+                        expected_senders=delegated_targets,
+                    )
+                    incoming = self._collect_leader_mailbox(leader)
+                    leader.add_message(
+                        "system",
+                        "AUTO-SYNC NOTICE: You delegated tasks. Orchestrator waited for replies from targeted agents "
+                        "(or until limits were reached).\n"
+                        f"Expected replies from: {', '.join(sorted(delegated_targets))}.\n"
+                        f"Team updates:\n{incoming}",
+                    )
+
+                    for tool_call in tool_calls:
+                        if tool_call["function"]["name"] == "wait":
+                            leader.add_tool_call_result(tool_call["id"], incoming, "wait")
+                elif is_waiting:
                     wait_timeout = self._extract_wait_timeout(tool_calls)
                     await self._process_collaboration_loop(timeout_seconds=wait_timeout)
                     wait_output = self._collect_leader_mailbox(leader)
@@ -64,15 +82,6 @@ class Orchestrator:
                     for tool_call in tool_calls:
                         if tool_call["function"]["name"] == "wait":
                             leader.add_tool_call_result(tool_call["id"], wait_output, "wait")
-                elif sent_chatroom:
-                    await self._process_collaboration_loop(timeout_seconds=self.DEFAULT_WAIT_TIMEOUT_SECONDS)
-                    incoming = self._collect_leader_mailbox(leader)
-                    leader.add_message(
-                        "system",
-                        "AUTO-WAIT NOTICE: You delegated via chatroom_send without wait. "
-                        "Collaboration loop was executed automatically.\n"
-                        f"Team updates:\n{incoming}",
-                    )
             elif content:
                 return content
 
@@ -113,14 +122,39 @@ class Orchestrator:
 
             if tool_calls:
                 is_waiting = any(tc["function"]["name"] == "wait" for tc in tool_calls)
-                sent_chatroom = any(tc["function"]["name"] == "chatroom_send" for tc in tool_calls)
+                delegated_targets = self._extract_chatroom_targets(leader, tool_calls)
 
                 for tool_call in tool_calls:
                     if tool_call["function"]["name"] != "wait":
                         async for ev in self._handle_tool_call_stream(leader, tool_call):
                             yield ev
 
-                if is_waiting:
+                if delegated_targets:
+                    wait_timeout = self._extract_wait_timeout(tool_calls)
+                    yield {
+                        "type": "status",
+                        "content": "Leader delegated tasks; waiting targeted replies from: " + ", ".join(sorted(delegated_targets)),
+                    }
+
+                    async for ev in self._process_collaboration_loop_stream(
+                        timeout_seconds=wait_timeout,
+                        expected_senders=delegated_targets,
+                    ):
+                        yield ev
+
+                    incoming = self._collect_leader_mailbox(leader)
+                    leader.add_message(
+                        "system",
+                        "AUTO-SYNC NOTICE: You delegated tasks. Orchestrator waited for replies from targeted agents "
+                        "(or until limits were reached).\n"
+                        f"Expected replies from: {', '.join(sorted(delegated_targets))}.\n"
+                        f"Team updates:\n{incoming}",
+                    )
+
+                    for tool_call in tool_calls:
+                        if tool_call["function"]["name"] == "wait":
+                            leader.add_tool_call_result(tool_call["id"], incoming, "wait")
+                elif is_waiting:
                     wait_timeout = self._extract_wait_timeout(tool_calls)
                     yield {"type": "wait", "agent": leader.name}
 
@@ -132,21 +166,6 @@ class Orchestrator:
                     for tool_call in tool_calls:
                         if tool_call["function"]["name"] == "wait":
                             leader.add_tool_call_result(tool_call["id"], wait_output, "wait")
-                elif sent_chatroom:
-                    yield {
-                        "type": "status",
-                        "content": "Leader delegated without wait; running automatic collaboration sync.",
-                    }
-                    async for ev in self._process_collaboration_loop_stream(timeout_seconds=self.DEFAULT_WAIT_TIMEOUT_SECONDS):
-                        yield ev
-                    incoming = self._collect_leader_mailbox(leader)
-                    leader.add_message(
-                        "system",
-                        "AUTO-WAIT NOTICE: You delegated via chatroom_send without wait. "
-                        "Collaboration loop was executed automatically.\n"
-                        f"Team updates:\n{incoming}",
-                    )
-
             elif content:
                 for i, word in enumerate(content.split(" ")):
                     yield {"type": "token", "content": word if i == 0 else f" {word}"}
@@ -228,7 +247,11 @@ class Orchestrator:
         elif func_name != "wait":
             caller.add_tool_call_result(tool_call_id, f"Error: Tool {func_name} not found.", func_name)
 
-    async def _process_collaboration_loop_stream(self, timeout_seconds: Optional[int] = None) -> AsyncGenerator[Dict[str, Any], None]:
+    async def _process_collaboration_loop_stream(
+        self,
+        timeout_seconds: Optional[int] = None,
+        expected_senders: Optional[set[str]] = None,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
         """Parallel collaboration loop that yields SSE events."""
         deadline = self._compute_deadline(timeout_seconds)
         round_count = 0
@@ -261,21 +284,11 @@ class Orchestrator:
                     await queue.put({"type": "thought", "agent": agent.name, "content": f"Error: {e}"})
 
             tasks = [asyncio.create_task(_run_and_collect(a)) for a in active_agents]
+            timeout_triggered = False
 
-            remaining = self._remaining_time(deadline)
-            if remaining is not None:
-                done, pending = await asyncio.wait(tasks, timeout=remaining)
-                if pending:
-                    for task in pending:
-                        task.cancel()
-                    await asyncio.gather(*pending, return_exceptions=True)
-                    yield {
-                        "type": "status",
-                        "content": "Collaboration wait timed out before all teammates finished.",
-                    }
-                for task in done:
-                    if task.exception():
-                        yield {"type": "thought", "agent": "orchestrator", "content": f"Error: {task.exception()}"}
+            while True:
+                done_count = sum(1 for task in tasks if task.done())
+
                 while not queue.empty():
                     yield await queue.get()
                 if pending:
@@ -287,14 +300,42 @@ class Orchestrator:
                         if task.done() and task not in done_tasks:
                             done_tasks.add(task)
 
-                    while not queue.empty():
-                        yield await queue.get()
+                if done_count == len(tasks):
+                    break
+
+                remaining = self._remaining_time(deadline)
+                if remaining is not None and remaining <= 0:
+                    timeout_triggered = True
+                    break
+
+                step_timeout = 0.1 if remaining is None else max(0.01, min(0.1, remaining))
+                await asyncio.wait(tasks, timeout=step_timeout)
 
                     if len(done_tasks) < len(tasks):
                         await asyncio.sleep(0.05)
 
-                while not queue.empty():
-                    yield await queue.get()
+            for task in tasks:
+                if task.done() and task.exception():
+                    yield {"type": "thought", "agent": "orchestrator", "content": f"Error: {task.exception()}"}
+
+            if timeout_triggered:
+                pending = [task for task in tasks if not task.done()]
+                for task in pending:
+                    task.cancel()
+                if pending:
+                    await asyncio.gather(*pending, return_exceptions=True)
+                yield {
+                    "type": "status",
+                    "content": "Collaboration wait timed out before all teammates finished.",
+                }
+                break
+
+            if expected_senders and self._expected_senders_replied(expected_senders):
+                yield {
+                    "type": "status",
+                    "content": "Received replies from all leader-targeted agents.",
+                }
+                break
 
     async def _run_agent_step_with_logic_stream(self, agent: Agent, depth: int = 0, round_count: int = 1) -> AsyncGenerator[Dict[str, Any], None]:
         """Execute a collaborator's step and yield SSE events."""
@@ -420,7 +461,11 @@ class Orchestrator:
         elif func_name != "wait":
             caller.add_tool_call_result(tool_call_id, f"Error: Tool {func_name} not found.", func_name)
 
-    async def _process_collaboration_loop(self, timeout_seconds: Optional[int] = None) -> None:
+    async def _process_collaboration_loop(
+        self,
+        timeout_seconds: Optional[int] = None,
+        expected_senders: Optional[set[str]] = None,
+    ) -> None:
         """Async propagation loop using parallel collaborator execution."""
         deadline = self._compute_deadline(timeout_seconds)
         round_count = 0
@@ -441,23 +486,35 @@ class Orchestrator:
 
             tasks = [asyncio.create_task(self._run_agent_step_with_logic(agent, round_count=round_count)) for agent in active_agents]
             if tasks:
-                remaining = self._remaining_time(deadline)
-                if remaining is not None:
-                    done, pending = await asyncio.wait(tasks, timeout=remaining)
+                timeout_triggered = False
+
+                while True:
+                    done_count = sum(1 for task in tasks if task.done())
+                    if done_count == len(tasks):
+                        break
+
+                    remaining = self._remaining_time(deadline)
+                    if remaining is not None and remaining <= 0:
+                        timeout_triggered = True
+                        break
+
+                    step_timeout = 0.1 if remaining is None else max(0.01, min(0.1, remaining))
+                    await asyncio.wait(tasks, timeout=step_timeout)
+
+                if timeout_triggered:
+                    pending = [task for task in tasks if not task.done()]
                     for task in pending:
                         task.cancel()
-                    await asyncio.gather(*pending, return_exceptions=True)
-                    results = [task.result() if not task.cancelled() else None for task in done if task.exception() is None]
-                    for task in done:
-                        if task.exception():
-                            print(f"[Orchestrator Error] Agent execution failed: {task.exception()}")
                     if pending:
-                        break
-                else:
-                    results = await asyncio.gather(*tasks, return_exceptions=True)
-                for res in results:
-                    if isinstance(res, Exception):
-                        print(f"[Orchestrator Error] Agent execution failed: {res}")
+                        await asyncio.gather(*pending, return_exceptions=True)
+                    break
+
+                if expected_senders and self._expected_senders_replied(expected_senders):
+                    break
+
+                for task in tasks:
+                    if task.exception():
+                        print(f"[Orchestrator Error] Agent execution failed: {task.exception()}")
 
     async def _run_agent_step_with_logic(self, agent: Agent, depth: int = 0, round_count: int = 1) -> Optional[str]:
         """Executes a collaborator's step logic (Think -> Tool -> follow-up)."""
@@ -570,6 +627,35 @@ class Orchestrator:
             "- Your personal local history follows (messages from agents, your own tool calls/results):\n"
             f"{history}"
         )
+
+    def _extract_chatroom_targets(self, caller: Agent, tool_calls: List[Dict[str, Any]]) -> set[str]:
+        targets: set[str] = set()
+        for tool_call in tool_calls:
+            if tool_call.get("function", {}).get("name") != "chatroom_send":
+                continue
+            args_str = tool_call.get("function", {}).get("arguments", "{}")
+            try:
+                args = json.loads(args_str)
+            except (TypeError, json.JSONDecodeError):
+                continue
+
+            recipients = args.get("to")
+            if not isinstance(recipients, list):
+                recipients = [recipients]
+
+            for recipient_name in recipients:
+                if recipient_name == "All":
+                    targets.update(name for name in ALL_AGENT_NAMES if name != caller.name)
+                elif isinstance(recipient_name, str) and recipient_name in self.agents and recipient_name != caller.name:
+                    targets.add(recipient_name)
+        return targets
+
+    def _expected_senders_replied(self, expected_senders: set[str]) -> bool:
+        if not expected_senders:
+            return True
+        leader_mailbox = self.agents[LEADER_NAME].mailbox
+        received = {str(msg.get("from")) for msg in leader_mailbox if msg.get("from") in expected_senders}
+        return expected_senders.issubset(received)
 
     def _extract_wait_timeout(self, tool_calls: List[Dict[str, Any]]) -> int:
         timeout = self.DEFAULT_WAIT_TIMEOUT_SECONDS
