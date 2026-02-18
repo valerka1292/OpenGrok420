@@ -25,20 +25,4 @@
     "required": ["message", "to"],
     "type": "object"
   }
-},
-{
-  "name": "wait",
-  "description": "Wait for a teammate's message or an async tool to return. There is a global timeout of 200.0s across all requests to this tool and a hard limit of 120.0s for each request to this tool.",
-  "parameters": {
-    "properties": {
-      "timeout": {
-        "default": 10,
-        "description": "The maximum amount of time in seconds to wait.",
-        "maximum": 120,
-        "minimum": 1,
-        "type": "integer"
-      }
-    },
-    "type": "object"
-  }
 }
