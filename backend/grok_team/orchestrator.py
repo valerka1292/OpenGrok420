@@ -1,6 +1,7 @@
 
 import json
 import asyncio
+from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional
 from grok_team.config import LEADER_NAME, COLLABORATOR_NAMES, ALL_AGENT_NAMES
 from grok_team.agent import Agent
@@ -11,6 +12,10 @@ class Orchestrator:
         self.agents: Dict[str, Agent] = {
             name: Agent(name) for name in ALL_AGENT_NAMES
         }
+
+    def _format_chat_message(self, sender: str, content: str) -> str:
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        return f"Chat with {sender}: From {sender}: [{timestamp}] {content}"
     
     async def run(self, user_input: str) -> str:
         """
@@ -37,31 +42,17 @@ class Orchestrator:
 
             # Priority to Tools
             if tool_calls:
-                is_waiting = any(tc["function"]["name"] == "wait" for tc in tool_calls)
+                wait_calls = [tc for tc in tool_calls if tc["function"]["name"] == "wait"]
                 
                 # Handle immediate tools (send/search)
                 for tool_call in tool_calls:
                     if tool_call["function"]["name"] != "wait":
                         await self._handle_tool_call(leader, tool_call)
                 
-                if is_waiting:
-                    # Execute 'wait' logic: Run collaborators
-                    await self._process_collaboration_loop()
-                    
-                    # Read Leader Mailbox
-                    incoming_messages = []
-                    while leader.mailbox:
-                        msg = leader.mailbox.pop(0)
-                        incoming_messages.append(f"Message from {msg['from']}: {msg['content']}")
-                    
-                    if incoming_messages:
-                        wait_output = "\n\n".join(incoming_messages)
-                    else:
-                        wait_output = "No new messages received from the team."
-
-                    for tool_call in tool_calls:
-                        if tool_call["function"]["name"] == "wait":
-                            leader.add_tool_call_result(tool_call["id"], wait_output, "wait")
+                if wait_calls:
+                    for wait_call in wait_calls:
+                        wait_output = await self._handle_wait_for_leader(leader, wait_call)
+                        leader.add_tool_call_result(wait_call["id"], wait_output, "wait")
             
             elif content:
                 return content
@@ -101,7 +92,6 @@ class Orchestrator:
                 target_names = [n for n in ALL_AGENT_NAMES if n != caller.name] if recipient_name == "All" else [recipient_name]
                 for target_name in target_names:
                     if target_name in self.agents:
-                        # Inject as SYSTEM message
                         self.agents[target_name].mailbox.append({
                             "from": caller.name, 
                             "content": message
@@ -133,6 +123,35 @@ class Orchestrator:
         elif func_name != "wait":
             caller.add_tool_call_result(tool_call_id, f"Error: Tool {func_name} not found.", func_name)
 
+    async def _handle_wait_for_leader(self, leader: Agent, wait_tool_call: Dict[str, Any]) -> str:
+        """Runs collaboration rounds until leader receives messages or wait timeout elapses."""
+        timeout_s = 10
+        try:
+            args = json.loads(wait_tool_call["function"].get("arguments", "{}") or "{}")
+            parsed_timeout = int(args.get("timeout", 10))
+            timeout_s = max(1, min(parsed_timeout, 120))
+        except (ValueError, TypeError, json.JSONDecodeError):
+            timeout_s = 10
+
+        elapsed = 0
+        poll_interval_s = 1
+
+        while elapsed < timeout_s and not leader.mailbox:
+            await self._process_collaboration_loop()
+            if leader.mailbox:
+                break
+            await asyncio.sleep(poll_interval_s)
+            elapsed += poll_interval_s
+
+        incoming_messages = []
+        while leader.mailbox:
+            msg = leader.mailbox.pop(0)
+            incoming_messages.append(self._format_chat_message(msg["from"], msg["content"]))
+
+        if incoming_messages:
+            return "\n\n".join(incoming_messages)
+        return "No new messages received from the team."
+
 
 
     async def _process_collaboration_loop(self) -> None:
@@ -158,7 +177,7 @@ class Orchestrator:
             for agent in active_agents:
                 while agent.mailbox:
                     msg = agent.mailbox.pop(0)
-                    agent.add_message("system", f"Message from {msg['from']}: {msg['content']}")
+                    agent.add_message("system", self._format_chat_message(msg["from"], msg["content"]))
             
             # Run active agents in PARALLEL
             tasks = [self._run_agent_step_with_logic(agent) for agent in active_agents]
