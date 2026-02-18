@@ -51,7 +51,11 @@ class Agent:
             "content": content
         })
 
-    async def step(self) -> Dict[str, Any]:
+    async def step(
+        self,
+        extra_system_context: Optional[str] = None,
+        allowed_tool_names: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
         """
         Executes a step of the agent using the OpenAI API with Streaming (Async).
         Returns the response message (either text or tool call).
@@ -59,10 +63,19 @@ class Agent:
         print(f"\n[{self.name}] Thinking (temp={self.temperature})...")
 
         try:
+            request_messages = list(self.messages)
+            if extra_system_context:
+                request_messages.append({"role": "system", "content": extra_system_context})
+
+            tools = ALL_TOOLS
+            if allowed_tool_names is not None:
+                allowed = set(allowed_tool_names)
+                tools = [tool for tool in ALL_TOOLS if tool.get("function", {}).get("name") in allowed]
+
             stream = await self.client.chat.completions.create(
                 model=self.model,
-                messages=self.messages,
-                tools=ALL_TOOLS,
+                messages=request_messages,
+                tools=tools,
                 tool_choice="auto",
                 stream=True,
                 temperature=self.temperature,
