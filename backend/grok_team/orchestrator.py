@@ -255,13 +255,18 @@ class Orchestrator:
         """Parallel collaboration loop that yields SSE events."""
         deadline = self._compute_deadline(timeout_seconds)
         round_count = 0
-        while round_count < self.MAX_PROPAGATION_ROUNDS:
+        while True:
             if self._deadline_expired(deadline):
                 yield {
                     "type": "status",
                     "content": "Collaboration wait timed out before all teammates finished.",
                 }
                 break
+
+            if round_count >= self.MAX_PROPAGATION_ROUNDS:
+                waiting_expected = bool(expected_senders and not self._expected_senders_replied(expected_senders))
+                if not waiting_expected:
+                    break
 
             round_count += 1
 
@@ -474,9 +479,14 @@ class Orchestrator:
         """Async propagation loop using parallel collaborator execution."""
         deadline = self._compute_deadline(timeout_seconds)
         round_count = 0
-        while round_count < self.MAX_PROPAGATION_ROUNDS:
+        while True:
             if self._deadline_expired(deadline):
                 break
+
+            if round_count >= self.MAX_PROPAGATION_ROUNDS:
+                waiting_expected = bool(expected_senders and not self._expected_senders_replied(expected_senders))
+                if not waiting_expected:
+                    break
 
             round_count += 1
 
