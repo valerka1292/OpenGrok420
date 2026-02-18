@@ -1,5 +1,6 @@
 
-from typing import List, Optional, Union
+import aiohttp
+from typing import List, Optional, Union, Dict, Any
 
 # Tool Definitions as Dictionaries (compatible with OpenAI function calling)
 # Correct format: {"type": "function", "function": {...}}
@@ -43,9 +44,32 @@ WAIT_FUNCTION = {
     }
 }
 
+WEB_SEARCH_FUNCTION = {
+    "name": "web_search",
+    "description": "This action allows you to search the web. You can use search operators like site:reddit.com when needed.",
+    "parameters": {
+        "properties": {
+          "query": {
+            "description": "The search query to look up on the web.",
+            "type": "string"
+          },
+          "num_results": {
+            "default": 10,
+            "description": "The number of results to return. It is optional, default 10, max is 30.",
+            "maximum": 30,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": ["query"],
+        "type": "object"
+    }
+}
+
 ALL_TOOLS = [
     {"type": "function", "function": CHATROOM_SEND_FUNCTION},
-    {"type": "function", "function": WAIT_FUNCTION}
+    {"type": "function", "function": WAIT_FUNCTION},
+    {"type": "function", "function": WEB_SEARCH_FUNCTION}
 ]
 
 # Python Implementations (for execution handling)
@@ -67,3 +91,27 @@ def wait(timeout: int = 10):
     The Orchestrator handles the actual waiting logic.
     """
     return f"Waited for {timeout} seconds."
+
+async def execute_web_search(query: str, num_results: int = 10) -> List[Dict[str, Any]]:
+    """
+    Executes a web search using a local search engine (e.g., SearXNG).
+    """
+    url = "http://localhost:8080/search"
+    # Map 'query' to 'q'. Categories default to 'general'.
+    params = {
+        "q": query,
+        "categories": "general",
+        "language": "en-US",
+        "pageno": 1,
+        "format": "json"
+    }
+    
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, params=params) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                results = data.get("results", [])
+                return results[:num_results]
+            else:
+                # Fallback or error
+                raise Exception(f"Search engine returned status {resp.status}")

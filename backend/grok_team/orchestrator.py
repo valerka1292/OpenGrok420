@@ -4,6 +4,7 @@ import asyncio
 from typing import Dict, List, Any, Optional
 from grok_team.config import LEADER_NAME, COLLABORATOR_NAMES, ALL_AGENT_NAMES
 from grok_team.agent import Agent
+from grok_team.tools import execute_web_search
 
 class Orchestrator:
     def __init__(self):
@@ -38,9 +39,10 @@ class Orchestrator:
             if tool_calls:
                 is_waiting = any(tc["function"]["name"] == "wait" for tc in tool_calls)
                 
+                # Handle immediate tools (send/search)
                 for tool_call in tool_calls:
                     if tool_call["function"]["name"] != "wait":
-                        self._handle_tool_call(leader, tool_call)
+                        await self._handle_tool_call(leader, tool_call)
                 
                 if is_waiting:
                     # Execute 'wait' logic: Run collaborators
@@ -77,8 +79,8 @@ class Orchestrator:
         agent.messages.append(msg_obj)
         return response
 
-    def _handle_tool_call(self, caller: Agent, tool_call: Dict[str, Any]):
-        """Execute chatroom_send/wait logic (Synchronous helper, no I/O)."""
+    async def _handle_tool_call(self, caller: Agent, tool_call: Dict[str, Any]):
+        """Execute tool logic (Async)."""
         func_name = tool_call["function"]["name"]
         args_str = tool_call["function"]["arguments"]
         tool_call_id = tool_call.get("id", "call_unknown")
@@ -106,10 +108,32 @@ class Orchestrator:
                         })
                         sent_info.append(target_name)
             
-            caller.add_tool_call_result(tool_call_id, f"Message sent to {', '.join(sent_info)}.", func_name)
+            if not sent_info:
+                caller.add_tool_call_result(tool_call_id, f"Error: No valid recipients found in {recipients}.", func_name)
+            else:
+                caller.add_tool_call_result(tool_call_id, f"Message sent to {', '.join(sent_info)}.", func_name)
             
+        elif func_name == "web_search":
+            query = args.get("query")
+            num_results = args.get("num_results", 10)
+            
+            try:
+                results = await execute_web_search(query, num_results)
+                
+                # Format results for the agent
+                formatted_results = []
+                for res in results:
+                    formatted_results.append(f"Title: {res.get('title')}\nURL: {res.get('url')}\nContent: {res.get('content')}\n")
+                
+                output = "\n---\n".join(formatted_results) if formatted_results else "No results found."
+                caller.add_tool_call_result(tool_call_id, output, func_name)
+            except Exception as e:
+                caller.add_tool_call_result(tool_call_id, f"Error performing search: {str(e)}", func_name)
+
         elif func_name != "wait":
             caller.add_tool_call_result(tool_call_id, f"Error: Tool {func_name} not found.", func_name)
+
+
 
     async def _process_collaboration_loop(self) -> None:
         """
@@ -139,7 +163,10 @@ class Orchestrator:
             # Run active agents in PARALLEL
             tasks = [self._run_agent_step_with_logic(agent) for agent in active_agents]
             if tasks:
-                await asyncio.gather(*tasks, return_exceptions=True)
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                for res in results:
+                    if isinstance(res, Exception):
+                        print(f"[Orchestrator Error] Agent execution failed: {res}")
         
         return None
 
@@ -164,12 +191,12 @@ class Orchestrator:
                 func_name = tool_call["function"]["name"]
                 
                 if func_name == "chatroom_send":
-                    self._handle_tool_call(agent, tool_call)
+                    await self._handle_tool_call(agent, tool_call)
                     # No need to return anything, message is enqueued
                 elif func_name == "wait":
                     agent.add_tool_call_result(tool_call["id"], "Waited.", "wait")
                 else:
-                    self._handle_tool_call(agent, tool_call)
+                    await self._handle_tool_call(agent, tool_call)
             return None
         
         return None

@@ -13,8 +13,8 @@ async def test_flow_async():
     print("Testing Grok Team Flow (Async)...")
     orchestrator = Orchestrator()
     
-    # Updated prompt to force tool usage
-    user_input = "Ask Harper for the capital of France. Explicitly tell her to reply using the 'chatroom_send' tool so you can receive the answer. Then wait for her response." 
+    # Updated prompt to force search tool usage
+    user_input = "Search for 'latest AI news' using the web_search tool. Limit to 5 results." 
     
     print(f"User Input: {user_input}")
     try:

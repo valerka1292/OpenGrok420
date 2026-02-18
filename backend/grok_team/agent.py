@@ -24,7 +24,7 @@ class Agent:
 
         # Temperature Setting
         if self.name == LEADER_NAME:
-            self.temperature = 0.5  # Fixed, lower temperature for Leader (stability)
+            self.temperature = 0.6  # Slightly higher for creative delegation
         else:
             self.temperature = round(random.uniform(0.0, 1.0), 2) # Random (0-1) for creativity
             
