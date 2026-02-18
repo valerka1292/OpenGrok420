@@ -18,6 +18,15 @@ class Orchestrator:
         self.agents: Dict[str, Agent] = {name: Agent(name) for name in ALL_AGENT_NAMES}
         self._event_queue: asyncio.Queue = asyncio.Queue()
 
+    def restore_leader_history(self, messages: List[Dict[str, str]]) -> None:
+        """Restore persisted user/assistant history into leader context for multi-turn continuity."""
+        leader = self.agents[LEADER_NAME]
+        for message in messages:
+            role = message.get("role")
+            content = str(message.get("content") or "").strip()
+            if role in {"user", "assistant"} and content:
+                leader.add_message(role, content)
+
     async def run(self, user_input: str) -> str:
         """Main execution loop (Async)."""
         leader = self.agents[LEADER_NAME]
@@ -37,6 +46,7 @@ class Orchestrator:
 
             if tool_calls:
                 is_waiting = any(tc["function"]["name"] == "wait" for tc in tool_calls)
+                sent_chatroom = any(tc["function"]["name"] == "chatroom_send" for tc in tool_calls)
 
                 for tool_call in tool_calls:
                     if tool_call["function"]["name"] != "wait":
@@ -44,17 +54,20 @@ class Orchestrator:
 
                 if is_waiting:
                     await self._process_collaboration_loop()
-
-                    incoming_messages = []
-                    while leader.mailbox:
-                        msg = leader.mailbox.pop(0)
-                        incoming_messages.append(f"Message from {msg['from']}: {msg['content']}")
-
-                    wait_output = "\n\n".join(incoming_messages) if incoming_messages else "No new messages received from the team."
+                    wait_output = self._collect_leader_mailbox(leader)
 
                     for tool_call in tool_calls:
                         if tool_call["function"]["name"] == "wait":
                             leader.add_tool_call_result(tool_call["id"], wait_output, "wait")
+                elif sent_chatroom:
+                    await self._process_collaboration_loop()
+                    incoming = self._collect_leader_mailbox(leader)
+                    leader.add_message(
+                        "system",
+                        "AUTO-WAIT NOTICE: You delegated via chatroom_send without wait. "
+                        "Collaboration loop was executed automatically.\n"
+                        f"Team updates:\n{incoming}",
+                    )
             elif content:
                 return content
 
@@ -95,6 +108,7 @@ class Orchestrator:
 
             if tool_calls:
                 is_waiting = any(tc["function"]["name"] == "wait" for tc in tool_calls)
+                sent_chatroom = any(tc["function"]["name"] == "chatroom_send" for tc in tool_calls)
 
                 for tool_call in tool_calls:
                     if tool_call["function"]["name"] != "wait":
@@ -107,16 +121,25 @@ class Orchestrator:
                     async for ev in self._process_collaboration_loop_stream():
                         yield ev
 
-                    incoming_messages = []
-                    while leader.mailbox:
-                        msg = leader.mailbox.pop(0)
-                        incoming_messages.append(f"Message from {msg['from']}: {msg['content']}")
-
-                    wait_output = "\n\n".join(incoming_messages) if incoming_messages else "No new messages received from the team."
+                    wait_output = self._collect_leader_mailbox(leader)
 
                     for tool_call in tool_calls:
                         if tool_call["function"]["name"] == "wait":
                             leader.add_tool_call_result(tool_call["id"], wait_output, "wait")
+                elif sent_chatroom:
+                    yield {
+                        "type": "status",
+                        "content": "Leader delegated without wait; running automatic collaboration sync.",
+                    }
+                    async for ev in self._process_collaboration_loop_stream():
+                        yield ev
+                    incoming = self._collect_leader_mailbox(leader)
+                    leader.add_message(
+                        "system",
+                        "AUTO-WAIT NOTICE: You delegated via chatroom_send without wait. "
+                        "Collaboration loop was executed automatically.\n"
+                        f"Team updates:\n{incoming}",
+                    )
 
             elif content:
                 for i, word in enumerate(content.split(" ")):
@@ -441,6 +464,13 @@ class Orchestrator:
             "from": agent.name,
             "content": f"[AUTO-FORWARDED COLLABORATOR RESPONSE] {text}",
         })
+
+    def _collect_leader_mailbox(self, leader: Agent) -> str:
+        incoming_messages = []
+        while leader.mailbox:
+            msg = leader.mailbox.pop(0)
+            incoming_messages.append(f"Message from {msg['from']}: {msg['content']}")
+        return "\n\n".join(incoming_messages) if incoming_messages else "No new messages received from the team."
 
     def _format_search_results(self, results: List[Dict[str, Any]]) -> str:
         formatted_results = [
