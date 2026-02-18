@@ -32,24 +32,6 @@ CHATROOM_SEND_FUNCTION = {
     }
 }
 
-WAIT_FUNCTION = {
-    "name": "wait",
-    "description": "Wait for a teammate's message. Use this when you have delegated a task and need the result before proceeding.",
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "timeout": {
-                "default": 10,
-                "description": "The maximum amount of time in seconds to wait.",
-                "maximum": 120,
-                "minimum": 1,
-                "type": "integer"
-            }
-        }
-    }
-}
-
-
 SET_CONVERSATION_TITLE_FUNCTION = {
     "name": "set_conversation_title",
     "description": "Set a concise, descriptive conversation title based on the first user message.",
@@ -124,7 +106,6 @@ PYTHON_RUN_FUNCTION = {
 
 ALL_TOOLS = [
     {"type": "function", "function": CHATROOM_SEND_FUNCTION},
-    {"type": "function", "function": WAIT_FUNCTION},
     {"type": "function", "function": WEB_SEARCH_FUNCTION},
     {"type": "function", "function": SET_CONVERSATION_TITLE_FUNCTION},
     {"type": "function", "function": PYTHON_RUN_FUNCTION}
@@ -143,12 +124,6 @@ def chatroom_send(message: str, to: Union[str, List[str]]):
     # The Orchestrator will intercept the tool call and handle the logic.
     return f"Message sent to {to}: {message[:50]}..."
 
-def wait(timeout: int = 10):
-    """
-    Waits for a response.
-    The Orchestrator handles the actual waiting logic.
-    """
-    return f"Waited for {timeout} seconds."
 
 async def execute_web_search(query: str, num_results: int = 10) -> List[Dict[str, Any]]:
     """
