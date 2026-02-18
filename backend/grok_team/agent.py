@@ -30,7 +30,7 @@ class Agent:
             
         print(f"[System] Agent {self.name} initialized with temperature: {self.temperature}")
 
-        # Initialize Azure OpenAI Client asynchronously
+        # Initialize OpenAI Client asynchronously
         self.client = AsyncOpenAI(
             api_key=OPENAI_API_KEY,
             base_url=OPENAI_BASE_URL
@@ -70,7 +70,7 @@ class Agent:
             )
             
             accumulated_content = ""
-            current_tool_calls = {} # index -> tool_call_data
+            current_tool_calls = {}
             
             print(f"[{self.name} Output]: ", end="", flush=True)
 
@@ -109,7 +109,7 @@ class Agent:
                             if tc.function.arguments:
                                 current_tool_calls[idx]["function"]["arguments"] += tc.function.arguments
 
-            print() # Newline after stream
+            print()
             
             response = {
                 "role": "assistant",
@@ -117,7 +117,6 @@ class Agent:
             }
             
             if current_tool_calls:
-                # Convert dict to list
                 response["tool_calls"] = []
                 for idx in sorted(current_tool_calls.keys()):
                     response["tool_calls"].append(current_tool_calls[idx])

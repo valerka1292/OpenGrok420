@@ -13,7 +13,8 @@ async def test_flow_async():
     print("Testing Grok Team Flow (Async)...")
     orchestrator = Orchestrator()
     
-    user_input = "Ask Harper for the capital of France and wait for the answer." 
+    # Updated prompt to force tool usage
+    user_input = "Ask Harper for the capital of France. Explicitly tell her to reply using the 'chatroom_send' tool so you can receive the answer. Then wait for her response." 
     
     print(f"User Input: {user_input}")
     try:
@@ -22,7 +23,6 @@ async def test_flow_async():
         print("\nSUCCESS: Async Flow executed without errors.")
     except Exception as e:
         print(f"\nFAILURE: Exception occurred: {e}")
-        # print stack trace
         import traceback
         traceback.print_exc()
         sys.exit(1)

@@ -31,30 +31,37 @@ class Orchestrator:
             content = response.get("content")
             tool_calls = response.get("tool_calls")
             
-            # Log thought/content if present
             if content:
                 print(f"[Orchestrator Log] {leader.name} says/thinks: {content}")
 
-            # Priority to Tools: If tool calls exist, execute them regardless of content.
+            # Priority to Tools
             if tool_calls:
                 is_waiting = any(tc["function"]["name"] == "wait" for tc in tool_calls)
                 
-                # Handle immediate tools (send)
                 for tool_call in tool_calls:
                     if tool_call["function"]["name"] != "wait":
                         self._handle_tool_call(leader, tool_call)
                 
                 if is_waiting:
-                    # Execute 'wait' logic with propagation loop and parallelism
-                    wait_results = await self._process_collaboration_loop()
+                    # Execute 'wait' logic: Run collaborators
+                    await self._process_collaboration_loop()
                     
+                    # Read Leader Mailbox
+                    incoming_messages = []
+                    while leader.mailbox:
+                        msg = leader.mailbox.pop(0)
+                        incoming_messages.append(f"Message from {msg['from']}: {msg['content']}")
+                    
+                    if incoming_messages:
+                        wait_output = "\n\n".join(incoming_messages)
+                    else:
+                        wait_output = "No new messages received from the team."
+
                     for tool_call in tool_calls:
                         if tool_call["function"]["name"] == "wait":
-                            result_str = "\n".join(wait_results) if wait_results else "No new messages."
-                            leader.add_tool_call_result(tool_call["id"], result_str, "wait")
+                            leader.add_tool_call_result(tool_call["id"], wait_output, "wait")
             
             elif content:
-                # Only return content as Final Answer if NO tools were called.
                 return content
         
         return "Error: Maximum turns reached without final answer."
@@ -92,7 +99,7 @@ class Orchestrator:
                 target_names = [n for n in ALL_AGENT_NAMES if n != caller.name] if recipient_name == "All" else [recipient_name]
                 for target_name in target_names:
                     if target_name in self.agents:
-                        # Inject as SYSTEM message to distinguish from User
+                        # Inject as SYSTEM message
                         self.agents[target_name].mailbox.append({
                             "from": caller.name, 
                             "content": message
@@ -104,12 +111,11 @@ class Orchestrator:
         elif func_name != "wait":
             caller.add_tool_call_result(tool_call_id, f"Error: Tool {func_name} not found.", func_name)
 
-    async def _process_collaboration_loop(self) -> List[str]:
+    async def _process_collaboration_loop(self) -> None:
         """
         Async propagation loop using asyncio.gather for parallel execution.
+        Populates mailboxes but returns nothing (Leader reads mailbox separately).
         """
-        collected_responses = [] 
-        
         max_propagation_rounds = 5
         round_count = 0
         
@@ -128,21 +134,14 @@ class Orchestrator:
             for agent in active_agents:
                 while agent.mailbox:
                     msg = agent.mailbox.pop(0)
-                    # Use SYSTEM role for teammate messages
                     agent.add_message("system", f"Message from {msg['from']}: {msg['content']}")
             
-            # Run active agents in PARALLEL using asyncio.gather
+            # Run active agents in PARALLEL
             tasks = [self._run_agent_step_with_logic(agent) for agent in active_agents]
             if tasks:
-                results = await asyncio.gather(*tasks, return_exceptions=True)
-                
-                for res in results:
-                    if isinstance(res, Exception):
-                        print(f"Error executing agent: {res}")
-                    elif res:
-                        collected_responses.append(res)
+                await asyncio.gather(*tasks, return_exceptions=True)
         
-        return collected_responses
+        return None
 
     async def _run_agent_step_with_logic(self, agent: Agent, depth=0) -> Optional[str]:
         """
@@ -161,27 +160,16 @@ class Orchestrator:
         
         if tool_calls:
             results = []
-            
             for tool_call in tool_calls:
                 func_name = tool_call["function"]["name"]
                 
                 if func_name == "chatroom_send":
                     self._handle_tool_call(agent, tool_call)
-                    args = json.loads(tool_call["function"]["arguments"])
-                    # If sending to Grok/All, capture as response? 
-                    if "Grok" in args.get("to", []) or "All" in args.get("to", []):
-                        results.append(f"Message from {agent.name}: {args.get('message')}")
-                        
+                    # No need to return anything, message is enqueued
                 elif func_name == "wait":
-                    # Recursive wait -> just yield control, outer loop handles propagation
-                    agent.add_tool_call_result(tool_call["id"], "Waited (Output yielded execution).", "wait")
+                    agent.add_tool_call_result(tool_call["id"], "Waited.", "wait")
                 else:
                     self._handle_tool_call(agent, tool_call)
-            
-            return "\n".join(results) if results else None
-        
-        elif content:
-            # If ONLY content, treat it as a response (e.g. answering directly)
-            return f"Response from {agent.name}: {content}"
+            return None
         
         return None
