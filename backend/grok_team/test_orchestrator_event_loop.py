@@ -53,10 +53,17 @@ class ScriptedOrchestrator(Orchestrator):
         return response
 
     async def _handle_tool_call(self, caller, tool_call):
-        caller.add_tool_call_result(tool_call.get("id", "id"), "ok", tool_call["function"]["name"])
+        func_name = tool_call["function"]["name"]
+        if func_name == "chatroom_send":
+            args = json.loads(tool_call["function"]["arguments"])
+            target = args.get("to")
+            message = args.get("message", "")
+            if target in self.agents:
+                self.agents[target].mailbox.append({"from": caller.name, "content": message})
+        caller.add_tool_call_result(tool_call.get("id", "id"), "ok", func_name)
 
     async def _handle_tool_call_stream(self, caller, tool_call):
-        caller.add_tool_call_result(tool_call.get("id", "id"), "ok", tool_call["function"]["name"])
+        await self._handle_tool_call(caller, tool_call)
         yield {"type": "tool_use", "agent": caller.name, "tool": tool_call["function"]["name"]}
 
 
@@ -108,6 +115,55 @@ class OrchestratorEventLoopTests(unittest.IsolatedAsyncioTestCase):
 
         token_text = "".join(e.get("content", "") for e in events if e.get("type") == "token")
         self.assertIn("Привет!", token_text)
+        self.assertEqual(events[-1]["type"], "done")
+
+    async def test_run_resumes_when_agent_reply_arrives(self):
+        orch = ScriptedOrchestrator([
+            {
+                "role": "assistant",
+                "content": "delegating",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "chatroom_send",
+                            "arguments": json.dumps({"to": "Harper", "message": "Say hi and guess a number"}),
+                        },
+                    }
+                ],
+            },
+            {"role": "assistant", "content": "Harper says hi and number 7."},
+        ])
+
+        result = await orch.run("ask one agent to greet and pick a number")
+        self.assertEqual(result, "Harper says hi and number 7.")
+
+    async def test_run_stream_resumes_when_agent_reply_arrives(self):
+        orch = ScriptedOrchestrator([
+            {
+                "role": "assistant",
+                "content": "delegating",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "chatroom_send",
+                            "arguments": json.dumps({"to": "Harper", "message": "Say hi and guess a number"}),
+                        },
+                    }
+                ],
+            },
+            {"role": "assistant", "content": "Harper says hi and number 7."},
+        ])
+
+        events = []
+        async for event in orch.run_stream("ask one agent to greet and pick a number", require_title_tool=False):
+            events.append(event)
+
+        token_text = "".join(e.get("content", "") for e in events if e.get("type") == "token")
+        self.assertIn("Harper says hi and number 7.", token_text)
         self.assertEqual(events[-1]["type"], "done")
 
 

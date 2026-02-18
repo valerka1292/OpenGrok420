@@ -34,10 +34,11 @@ class Orchestrator:
         leader_has_pending_follow_up = True
 
         while session_steps < self.MAX_SESSION_STEPS:
+            leader_mailbox_ingested = 0
             if leader.mailbox:
-                self._ingest_mailbox(leader)
+                leader_mailbox_ingested = self._ingest_mailbox(leader)
 
-            if leader.mailbox or session_steps == 0 or leader_has_pending_follow_up:
+            if leader_mailbox_ingested > 0 or session_steps == 0 or leader_has_pending_follow_up:
                 leader_has_pending_follow_up = False
                 response = await self._run_agent(leader)
                 session_steps += 1
@@ -109,14 +110,15 @@ class Orchestrator:
         leader_has_pending_follow_up = True
 
         while session_steps < self.MAX_SESSION_STEPS:
+            leader_mailbox_ingested = 0
             if leader.mailbox:
-                ingested = self._ingest_mailbox(leader)
+                leader_mailbox_ingested = self._ingest_mailbox(leader)
                 yield {
                     "type": "status",
-                    "content": f"Leader received {ingested} new team update(s).",
+                    "content": f"Leader received {leader_mailbox_ingested} new team update(s).",
                 }
 
-            if leader.mailbox or session_steps == 0 or leader_has_pending_follow_up:
+            if leader_mailbox_ingested > 0 or session_steps == 0 or leader_has_pending_follow_up:
                 leader_has_pending_follow_up = False
                 response = await self._run_agent(leader)
                 session_steps += 1
