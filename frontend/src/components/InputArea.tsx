@@ -32,6 +32,7 @@ export default function InputArea() {
         currentStatus,
         lastError,
         clearMessages,
+        activeSessionId,
     } = useChat();
 
     const canSubmit = useMemo(() => input.trim().length > 0 && !isGenerating, [input, isGenerating]);
@@ -72,6 +73,7 @@ export default function InputArea() {
                 body: JSON.stringify({
                     message: userMsg,
                     temperatures: temperature,
+                    session_id: activeSessionId || undefined,
                 }),
             });
 
@@ -92,6 +94,17 @@ export default function InputArea() {
             const reader = response.body.getReader();
             const decoder = new TextDecoder();
             let buffer = '';
+            let streamCompleted = false;
+
+            const handleParsedEvent = (line: string) => {
+                const event = parseNdjsonChunk(line);
+                if (!event) return;
+
+                handleStreamEvent(event);
+                if (event.type === 'done') {
+                    streamCompleted = true;
+                }
+            };
 
             while (true) {
                 const { done, value } = await reader.read();
@@ -103,29 +116,30 @@ export default function InputArea() {
 
                 for (const line of lines) {
                     try {
-                        const event = parseNdjsonChunk(line);
-                        if (event) {
-                            handleStreamEvent(event);
-                        }
+                        handleParsedEvent(line);
+                        if (streamCompleted) break;
                     } catch {
                         // keep stream alive even with malformed lines
                     }
                 }
+
+                if (streamCompleted) {
+                    break;
+                }
             }
 
             const tail = buffer.trim();
-            if (tail) {
+            if (tail && !streamCompleted) {
                 try {
-                    const event = parseNdjsonChunk(tail);
-                    if (event) {
-                        handleStreamEvent(event);
-                    }
+                    handleParsedEvent(tail);
                 } catch {
                     // ignored
                 }
             }
 
-            handleStreamEvent({ type: 'done' });
+            if (!streamCompleted) {
+                handleStreamEvent({ type: 'done' });
+            }
         } catch (error) {
             if (error instanceof DOMException && error.name === 'AbortError') {
                 handleStreamEvent({ type: 'done' });
@@ -164,7 +178,7 @@ export default function InputArea() {
                         )}
                         <button
                             type="button"
-                            onClick={clearMessages}
+                            onClick={() => { void clearMessages(); }}
                             className="inline-flex items-center gap-1 text-text-muted hover:text-text-primary px-2 py-1 rounded-md hover:bg-white/5"
                             title="Очистить диалог"
                         >

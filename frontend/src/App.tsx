@@ -3,12 +3,25 @@ import { Menu } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import ChatArea from './components/ChatArea';
 import InputArea from './components/InputArea';
+import useChat from './store/useChat';
 
 const HEALTHCHECK_INTERVAL_MS = 30000;
 
 export default function App() {
     const [isSidebarOpen, setIsSidebarOpen] = useState(true);
     const [isBackendOnline, setIsBackendOnline] = useState<boolean | null>(null);
+
+    const {
+        sessions,
+        activeSessionId,
+        loadSessions,
+        createSession,
+        setActiveSession,
+    } = useChat();
+
+    useEffect(() => {
+        void loadSessions();
+    }, [loadSessions]);
 
     useEffect(() => {
         let isMounted = true;
@@ -52,6 +65,10 @@ export default function App() {
                     isOpen={isSidebarOpen}
                     toggle={() => setIsSidebarOpen(!isSidebarOpen)}
                     isBackendOnline={isBackendOnline}
+                    sessions={sessions}
+                    activeSessionId={activeSessionId}
+                    onCreateSession={() => void createSession()}
+                    onSelectSession={(sessionId) => void setActiveSession(sessionId)}
                 />
             </aside>
 
@@ -62,6 +79,10 @@ export default function App() {
                             isOpen={isSidebarOpen}
                             toggle={() => setIsSidebarOpen(false)}
                             isBackendOnline={isBackendOnline}
+                            sessions={sessions}
+                            activeSessionId={activeSessionId}
+                            onCreateSession={() => void createSession()}
+                            onSelectSession={(sessionId) => void setActiveSession(sessionId)}
                         />
                     </div>
                 </div>
