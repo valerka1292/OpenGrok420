@@ -75,6 +75,7 @@ export interface ChatState {
   currentConversationId: string | null;
   queuedPrompt: string | null;
   queuedPromptAutoSend: boolean;
+  forceStopGeneration: boolean;
   selectedMessageIndex: number | null;
 
   setAgentTemperature: (agent: string, temp: number) => void;
@@ -117,6 +118,7 @@ const useChat = create<ChatState>((set, get) => ({
   currentConversationId: null,
   queuedPrompt: null,
   queuedPromptAutoSend: false,
+  forceStopGeneration: false,
   selectedMessageIndex: null,
   temperature: {
     Grok: 0.7,
@@ -326,6 +328,7 @@ const useChat = create<ChatState>((set, get) => ({
       currentStatus: "История загружена",
       queuedPrompt: null,
       queuedPromptAutoSend: false,
+      forceStopGeneration: false,
       selectedMessageIndex: null,
     });
   },
