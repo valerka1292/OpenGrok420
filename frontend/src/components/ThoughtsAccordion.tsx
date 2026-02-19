@@ -1,23 +1,11 @@
 import { useState, useEffect } from 'react';
-import { ChevronRight, ChevronDown, Search, Clock, MessageSquare, Zap } from 'lucide-react';
+import { ChevronRight, ChevronDown, Search, Clock, MessageSquare, Zap, ArrowRight, Megaphone, Lock } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import MarkdownRenderer from './MarkdownRenderer';
 import { Thought } from '../store/useChat';
 import useChat from '../store/useChat';
-
-const agentColors: Record<string, string> = {
-    Grok: 'bg-green-500',
-    Harper: 'bg-purple-500',
-    Benjamin: 'bg-blue-500',
-    Lucas: 'bg-red-500',
-};
-
-const agentTextColors: Record<string, string> = {
-    Grok: 'text-green-500',
-    Harper: 'text-purple-500',
-    Benjamin: 'text-blue-500',
-    Lucas: 'text-red-500',
-};
+import { getAgentColor, getThoughtGradientStyle, parseRecipients } from '../lib/log-visuals';
+import { agentConfig } from '../lib/agent-config';
 
 interface ThoughtsAccordionProps {
     thoughts: Thought[];
@@ -70,7 +58,11 @@ export default function ThoughtsAccordion({ thoughts, isThinking, duration = 0, 
                 <div className="flex -space-x-2">
                     {activeAgents.length > 0 ? (
                         activeAgents.map((name) => (
-                            <div key={name} className={`w-5 h-5 rounded-full border border-bg-body flex items-center justify-center text-[9px] text-white font-bold ${agentColors[name] || 'bg-gray-500'}`}>
+                            <div
+                                key={name}
+                                style={{ backgroundColor: getAgentColor(name) }}
+                                className="w-5 h-5 rounded-full border border-bg-body flex items-center justify-center text-[9px] text-white font-bold"
+                            >
                                 {name[0]}
                             </div>
                         ))
@@ -134,18 +126,21 @@ export default function ThoughtsAccordion({ thoughts, isThinking, duration = 0, 
                             {thoughts.map((t, idx) => (
                                 <div key={idx} className="flex gap-3 animate-in fade-in slide-in-from-top-2 duration-300">
                                     <div className="flex-shrink-0 mt-1">
-                                        <div className={`w-6 h-6 rounded-md flex items-center justify-center text-[10px] font-bold text-white shadow-sm ${agentColors[t.agent || ''] || 'bg-gray-600'}`}>
+                                        <div
+                                            style={{ backgroundColor: getAgentColor(t.agent) }}
+                                            className="w-6 h-6 rounded-md flex items-center justify-center text-[10px] font-bold text-white shadow-sm"
+                                        >
                                             {t.agent ? t.agent[0] : '?'}
                                         </div>
                                     </div>
 
                                     <div className="flex-1 min-w-0">
-                                        <div className={`text-xs font-bold mb-1 ${agentTextColors[t.agent || ''] || 'text-text-secondary'}`}>
+                                        <div style={{ color: getAgentColor(t.agent) }} className="text-xs font-bold mb-1">
                                             {t.agent}
                                         </div>
 
                                         {t.type === 'tool_use' ? (
-                                            <div className="border border-blue-500/20 bg-blue-500/5 rounded-lg p-2.5">
+                                            <div style={getThoughtGradientStyle(t.agent, t.type)} className="border rounded-lg p-2.5">
                                                 <div className="flex items-center gap-2 text-accent-blue mb-1">
                                                     <Search size={14} />
                                                     <span className="font-semibold text-xs">Поиск инструмента</span>
@@ -155,24 +150,55 @@ export default function ThoughtsAccordion({ thoughts, isThinking, duration = 0, 
                                                 </div>
                                             </div>
                                         ) : t.type === 'chatroom_send' ? (
-                                            <div className="border border-border-subtle bg-bg-surface rounded-lg p-3">
+                                            <div style={getThoughtGradientStyle(t.agent, t.type)} className="border rounded-lg p-3">
                                                 <div className="flex items-center gap-2 text-text-secondary mb-2 pb-2 border-b border-border-subtle/50">
                                                     <MessageSquare size={14} />
-                                                    <span className="text-xs">
-                                                        Сообщение для <span className={`font-bold ${agentTextColors[t.to || '']}`}>{t.to}</span>
-                                                    </span>
+                                                    {(() => {
+                                                        const { recipients, isBroadcast } = parseRecipients(t.to);
+                                                        if (isBroadcast) {
+                                                            return (
+                                                                <span className="text-xs inline-flex items-center gap-1.5">
+                                                                    <ArrowRight size={12} className="opacity-70" />
+                                                                    <Megaphone size={12} /> Всем агентам
+                                                                </span>
+                                                            );
+                                                        }
+
+                                                        if (recipients.length > 1) {
+                                                            return (
+                                                                <span className="text-xs inline-flex items-center gap-1.5 flex-wrap">
+                                                                    <ArrowRight size={12} className="opacity-70" />
+                                                                    {recipients.map((recipient) => (
+                                                                        <span key={recipient} className="px-1.5 py-0.5 rounded-full border border-border-default bg-bg-body/60 text-text-primary">
+                                                                            {recipient}
+                                                                        </span>
+                                                                    ))}
+                                                                </span>
+                                                            );
+                                                        }
+
+                                                        const recipient = recipients[0] || t.to || 'Unknown';
+                                                        const recipientColor = recipient in agentConfig ? getAgentColor(recipient) : 'var(--text-secondary)';
+                                                        return (
+                                                            <span className="text-xs inline-flex items-center gap-1.5">
+                                                                <ArrowRight size={12} className="opacity-70" />
+                                                                <span style={{ color: recipientColor }} className="font-bold">{recipient}</span>
+                                                                <Lock size={11} className="text-amber-300" />
+                                                            </span>
+                                                        );
+                                                    })()}
                                                 </div>
                                                 <div className="text-text-primary/90">
                                                     <MarkdownRenderer content={t.content || ''} className="text-xs prose-p:my-1" />
                                                 </div>
                                             </div>
                                         ) : t.type === 'wait' ? (
-                                            <div className="flex items-center gap-2 text-text-muted italic opacity-70">
+                                            <div style={getThoughtGradientStyle(t.agent, t.type)} className="flex items-center gap-2 text-text-muted italic opacity-70 border rounded-lg p-2.5">
                                                 <Clock size={14} />
                                                 <span>Ожидает ответа...</span>
                                             </div>
                                         ) : (
-                                            <div className="text-text-secondary/90 leading-relaxed">
+                                            <div style={getThoughtGradientStyle(t.agent, t.type)} className="text-text-secondary/90 leading-relaxed border rounded-lg p-2.5">
                                                 <MarkdownRenderer content={t.content || ''} className="text-xs prose-p:my-1 text-text-secondary/90" />
                                             </div>
                                         )}
