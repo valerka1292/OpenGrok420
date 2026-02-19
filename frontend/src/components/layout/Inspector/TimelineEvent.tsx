@@ -56,10 +56,10 @@ export default function TimelineEvent({ event }: { event: Thought }) {
               );
             })()}
           </div>
-          <div className="text-text-secondary leading-4 font-mono">{event.content || '...'}</div>
+          <div className="text-text-primary/90 leading-relaxed font-mono mt-1.5">{event.content || '...'}</div>
         </div>
       ) : (
-        <div className="text-text-secondary leading-4 font-mono">{event.content || event.query || event.tool || '...'}</div>
+        <div className="text-text-primary/90 leading-relaxed font-mono mt-1.5">{event.content || event.query || event.tool || '...'}</div>
       )}
     </article>
   );
