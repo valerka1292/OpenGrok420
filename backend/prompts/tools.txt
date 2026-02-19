@@ -1,37 +1,4 @@
-{
-  "name": "chatroom_send",
-  "description": "Send a message to other agents in your team. If another agent sends you a message while you are thinking, it will be directly inserted into your context as a function turn. If another agent sends you a message while you are making a function call, the message will be appended to the function response of the tool call that you make.",
-  "parameters": {
-    "properties": {
-      "message": {
-        "description": "Message content to send",
-        "type": "string"
-      },
-      "to": {
-        "anyOf": [
-          {
-            "type": "string"
-          },
-          {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          }
-        ],
-        "description": "Names of the message recipients. Pass 'All' to broadcast a message to the entire group."
-      }
-    },
-    "required": ["message", "to"],
-    "type": "object"
-  }
-},
-{
-  "name": "wait",
-  "description": "No-op waiting signal. Use this when you have already delegated tasks and are waiting for teammates. This tool has no arguments and no payload result.",
-  "parameters": {
-    "type": "object",
-    "properties": {},
-    "additionalProperties": false
-  }
-}
+This file is deprecated.
+
+Tool descriptions are generated dynamically from backend/grok_team/tools.py via prompts_loader.generate_tools_prompt().
+Do not hardcode tool schemas here.

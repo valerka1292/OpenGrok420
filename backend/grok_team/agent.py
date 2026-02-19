@@ -14,7 +14,7 @@ from grok_team.config import (
     OPENAI_MODEL_NAME
 )
 from grok_team.prompts_loader import get_system_prompt
-from grok_team.tools import ALL_TOOLS
+from grok_team.tools import get_tools_for_agent
 from grok_team.actor import Actor
 from grok_team.event_bus import EventBus
 
@@ -48,6 +48,7 @@ class Agent(Actor):
             base_url=OPENAI_BASE_URL
         )
         self.model = OPENAI_MODEL_NAME
+        self.active_correlation_id: Optional[str] = None
 
     async def handle_message(self, message: Dict[str, Any]):
         """Event handler for the Agent logic."""
@@ -58,6 +59,9 @@ class Agent(Actor):
         if msg_type == "TaskSubmitted":
             content = message.get("content")
             sender = message.get("from")
+            conversation_id = message.get("conversation_id")
+            if conversation_id:
+                self.active_correlation_id = conversation_id
             # Archive user/sender message
             self.add_message("user", f"[Message from {sender}]: {content}" if sender else content)
             
@@ -69,7 +73,7 @@ class Agent(Actor):
             sender = message.get("from")
             content = message.get("content")
             self.add_message("user", f"[Result from {sender}]: {content}")
-            await self._run_step_loop(correlation_id, correlation_id) # Continue thinking with new info and answer request initiator
+            await self._run_step_loop(sender, correlation_id) # Continue thinking with new info and answer request initiator
 
         elif msg_type == "SystemCallResult":
             # Handle result of spawn/kill etc
@@ -84,6 +88,10 @@ class Agent(Actor):
         """Runs the Think -> Act -> Observe loop until final answer or stop."""
         try:
             while True:
+                if correlation_id and await self._is_cancelled(correlation_id):
+                    logger.info(f"[{self.name}] Stop loop for cancelled correlation {correlation_id}")
+                    return
+
                 response = await self.step()
 
                 # 1. If we have content, send it to sender (streaming logic replacement)
@@ -194,7 +202,19 @@ class Agent(Actor):
                 return False
 
             elif name == "set_conversation_title":
-                result = "Title set (mock)"
+                title = (args.get("title") or "").strip()
+                if not title:
+                    result = "Error: Title cannot be empty"
+                else:
+                    await self.event_bus.publish({
+                        "type": "ConversationTitleUpdated",
+                        "from": self.name,
+                        "actor": self.name,
+                        "correlation_id": correlation_id,
+                        "conversation_id": self.active_correlation_id,
+                        "title": title,
+                    })
+                    result = f"Title updated: {title}"
 
             else:
                 result = f"Error: Unknown tool {name}"
@@ -208,6 +228,11 @@ class Agent(Actor):
 
         return True
             
+
+    async def _is_cancelled(self, correlation_id: str) -> bool:
+        from grok_team.server_runtime import CANCELLED_REQUESTS
+        return correlation_id in CANCELLED_REQUESTS
+
     def add_message(self, role: str, content: str, name: str = None):
         msg = {"role": role, "content": content}
         if name:
@@ -259,6 +284,15 @@ class Agent(Actor):
                 continue
 
             break
+
+        split_idx = min(split_idx, len(self.messages))
+        while split_idx < len(self.messages) and self.messages[split_idx].get("role") == "tool":
+            split_idx += 1
+
+        if split_idx < len(self.messages):
+            role = self.messages[split_idx].get("role")
+            if role not in {"user", "assistant", "system"}:
+                split_idx += 1
 
         return min(split_idx, len(self.messages))
 
@@ -344,7 +378,7 @@ class Agent(Actor):
             response_obj = await self.client.chat.completions.create(
                 model=self.model,
                 messages=request_messages,
-                tools=ALL_TOOLS,
+                tools=get_tools_for_agent(self.name == LEADER_NAME),
                 tool_choice="auto",
                 stream=False,
                 temperature=self.temperature,

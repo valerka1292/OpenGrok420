@@ -1,5 +1,6 @@
 
 import asyncio
+import json
 import pkgutil
 import subprocess
 import sys
@@ -236,6 +237,31 @@ ALL_TOOLS.extend([
     {"type": "function", "function": READ_LOGS_FUNCTION},
     {"type": "function", "function": STOP_PROCESS_FUNCTION}
 ])
+
+SYSTEM_TOOL_NAMES = {"spawn_agent", "kill_agent", "list_agents", "allocate_budget"}
+
+
+def get_tools_for_agent(is_leader: bool) -> List[Dict[str, Any]]:
+    """Return tool list filtered by agent role."""
+    if is_leader:
+        return list(ALL_TOOLS)
+    return [tool for tool in ALL_TOOLS if tool["function"]["name"] not in SYSTEM_TOOL_NAMES]
+
+
+def generate_tools_prompt(is_leader: bool) -> str:
+    """Build a prompt section describing currently available tools."""
+    available_tools = get_tools_for_agent(is_leader)
+    lines = [
+        "### AVAILABLE TOOLS",
+        "These tool definitions are generated from the live backend registry.",
+        "For large tool outputs, use `read_artifact` with the returned artifact ID.",
+    ]
+    for tool in available_tools:
+        fn = tool["function"]
+        lines.append("\n```json")
+        lines.append(json.dumps(fn, ensure_ascii=False, indent=2))
+        lines.append("```")
+    return "\n".join(lines)
 
 async def _log_reader(pid: int):
     """Internal task to read logs from a process."""

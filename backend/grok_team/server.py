@@ -17,6 +17,7 @@ from grok_team.kernel import Kernel
 from grok_team.agent import Agent
 from grok_team.config import ALL_AGENT_NAMES, LEADER_NAME
 from grok_team.history import SQLiteHistoryStore, StoredMessage
+from grok_team.server_runtime import CANCELLED_REQUESTS
 
 app = FastAPI(title="Grok Team API")
 KERNEL = Kernel()
@@ -169,6 +170,7 @@ async def chat_stream(req: ChatRequest):
             "MemoryCompressed",
             "AgentSpawned",
             "AgentStopped",
+            "ConversationTitleUpdated",
         ]
         for topic in topics:
             KERNEL.event_bus.subscribe(topic, on_event)
@@ -181,6 +183,7 @@ async def chat_stream(req: ChatRequest):
             "type": "TaskSubmitted",
             "from": request_id, 
             "correlation_id": correlation_id,
+            "conversation_id": conversation.id,
             "content": req.message
         })
         
@@ -254,6 +257,15 @@ async def chat_stream(req: ChatRequest):
                      event_payload = {'type': 'thought', 'agent': 'Kernel', 'content': f"💀 Stopped Agent: {event.get('actor')}"}
                      assistant_thoughts.append(event_payload)
                      yield _sse(event_payload)
+
+                elif event_type == "ConversationTitleUpdated":
+                     title = str(event.get("title") or "").strip()
+                     conv_id = event.get("conversation_id") or conversation.id
+                     if title and conv_id:
+                         async with history_lock:
+                             updated = await history_store.update_title(str(conv_id), title)
+                         if updated:
+                             yield _sse({'type': 'conversation_title'})
                      
                 elif event_type == "TaskFailed":
                      event_payload = {'type': 'thought', 'agent': sender, 'content': f"❌ Error: {event.get('error')}"}
@@ -280,6 +292,7 @@ async def chat_stream(req: ChatRequest):
             yield _sse({'type': 'error', 'content': str(e)})
             yield _sse({'type': 'done'})
         finally:
+            CANCELLED_REQUESTS.add(correlation_id)
             for topic in topics:
                 KERNEL.event_bus.unsubscribe(topic, on_event)
             KERNEL.event_bus._actor_inboxes.pop(request_id, None)
