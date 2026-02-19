@@ -59,7 +59,7 @@ body { margin:0; overflow:hidden; background:var(--bg-global); color:var(--text-
 
 /* Ссылки */
 .markdown-body a {
-  @apply text-agent-benjamin no-underline border-b border-agent-benjamin/30 pb-[1px] hover:border-agent-benjamin hover:text-blue-400 transition-colors duration-200;
+  @apply text-agent-benjamin no-underline border-b border-agent-benjamin/30 pb-[1px] hover:border-agent-benjamin hover:text-agent-grok transition-colors duration-200;
 }
 
 /* Списки */
@@ -78,12 +78,15 @@ body { margin:0; overflow:hidden; background:var(--bg-global); color:var(--text-
 .markdown-body hr { @apply my-8 border-t border-border-subtle; }
 
 /* Таблицы */
-.markdown-body table { @apply w-full my-6 text-sm border-collapse overflow-hidden; }
+.markdown-body table { @apply w-full my-6 text-sm border-collapse; }
 .markdown-body thead { @apply bg-bg-surface-2 border-b border-border-default; }
 .markdown-body th { @apply px-4 py-2.5 text-left font-semibold text-text-primary whitespace-nowrap; }
 .markdown-body tbody tr { @apply border-b border-border-subtle hover:bg-white/[0.02] transition-colors; }
 .markdown-body tbody tr:last-child { @apply border-0; }
 .markdown-body td { @apply px-4 py-2.5 align-top; }
+
+.markdown-body img { @apply my-4 rounded-lg border border-border-subtle shadow-md; }
+.markdown-body pre { @apply my-4; }
 
 /* Инлайн-код (исключаем блоки pre, чтобы не сломать подсветку синтаксиса) */
 .markdown-body :not(pre) > code {
@@ -102,6 +105,6 @@ body { margin:0; overflow:hidden; background:var(--bg-global); color:var(--text-
 }
 .markdown-body .footnotes h2 { @apply hidden; }
 .markdown-body .footnotes ol { @apply list-decimal pl-5 space-y-2; }
-.markdown-body .data-footnote-backref {
+.markdown-body a[data-footnote-backref] {
   @apply text-agent-grok ml-1 px-1 border-0 hover:bg-agent-grok/10 rounded no-underline;
 }
