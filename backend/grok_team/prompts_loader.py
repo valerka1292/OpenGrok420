@@ -2,6 +2,7 @@
 import os
 from typing import List
 from grok_team.config import LEADER_START_PROMPT, AGENTS_START_PROMPT, ALL_PROMPT, LEADER_NAME
+from grok_team.tools import generate_tools_prompt
 
 def load_file(filepath):
     """Loads content from a text file."""
@@ -19,6 +20,7 @@ def get_system_prompt(agent_name: str, all_agent_names: List[str]) -> str:
         header_template = load_file(AGENTS_START_PROMPT)
     
     core_body = load_file(ALL_PROMPT)
+    tools_body = generate_tools_prompt(agent_name == LEADER_NAME)
     
     # 2. Dynamic Replacement Logic
     
@@ -62,6 +64,6 @@ def get_system_prompt(agent_name: str, all_agent_names: List[str]) -> str:
         header = header.replace("[AGENT2], [AGENT3]", peers_str)
     
     # 3. Concatenate
-    full_prompt = f"{header}\n\n{core_body}"
+    full_prompt = f"{header}\n\n{core_body}\n\n{tools_body}"
     
     return full_prompt
