@@ -20,6 +20,18 @@ class EventBus:
         """Subscribes a handler to a specific topic (Pub/Sub pattern)."""
         self._subscribers[topic].append(handler)
 
+    def unsubscribe(self, topic: str, handler: Callable[[Dict[str, Any]], Awaitable[None]]):
+        """Removes a handler from a topic if it exists."""
+        handlers = self._subscribers.get(topic)
+        if not handlers:
+            return
+        try:
+            handlers.remove(handler)
+        except ValueError:
+            return
+        if not handlers:
+            self._subscribers.pop(topic, None)
+
     async def publish(self, event: Dict[str, Any]):
         """
         Publishes an event.
@@ -37,7 +49,7 @@ class EventBus:
 
         # 2. Pub/Sub Routing (Observers)
         if topic in self._subscribers:
-            for handler in self._subscribers[topic]:
+            for handler in list(self._subscribers[topic]):
                 try:
                     await handler(event)
                 except Exception as e:
@@ -53,3 +65,10 @@ class EventBus:
     def subscribe_globally(self, handler: Callable[[Dict[str, Any]], Awaitable[None]]):
         """Subscribes a handler to all events."""
         self._global_subscribers.append(handler)
+
+    def unsubscribe_globally(self, handler: Callable[[Dict[str, Any]], Awaitable[None]]):
+        """Removes a global subscriber if it exists."""
+        try:
+            self._global_subscribers.remove(handler)
+        except ValueError:
+            return

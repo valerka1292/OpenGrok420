@@ -83,25 +83,28 @@ class Agent(Actor):
     async def _run_step_loop(self, initial_sender: Optional[str], correlation_id: Optional[str] = None):
         """Runs the Think -> Act -> Observe loop until final answer or stop."""
         try:
-            response = await self.step()
-            
-            # 1. If we have content, send it to sender (streaming logic replacement)
-            if response.get("content") and initial_sender:
-                await self.send(initial_sender, {
-                    "type": "TaskCompleted",
-                    "from": self.name,
-                    "correlation_id": correlation_id,
-                    "content": response["content"] # Incremental update?
-                })
+            while True:
+                response = await self.step()
 
-            # 2. Handle Tool Calls
-            tool_calls = response.get("tool_calls")
-            if tool_calls:
-                logger.info(f"[{self.name}] Executing {len(tool_calls)} tools in parallel...")
-                tasks = [self._execute_tool(tc, initial_sender, correlation_id) for tc in tool_calls]
-                await asyncio.gather(*tasks)
-                
-                pass # Logic depends on tool type
+                # 1. If we have content, send it to sender (streaming logic replacement)
+                if response.get("content") and initial_sender:
+                    await self.send(initial_sender, {
+                        "type": "TaskCompleted",
+                        "from": self.name,
+                        "correlation_id": correlation_id,
+                        "content": response["content"]
+                    })
+
+                # 2. Handle Tool Calls
+                tool_calls = response.get("tool_calls")
+                if not tool_calls:
+                    break
+
+                logger.info(f"[{self.name}] Executing {len(tool_calls)} tools...")
+                for tool_call in tool_calls:
+                    should_continue = await self._execute_tool(tool_call, correlation_id)
+                    if not should_continue:
+                        return
 
         except Exception as e:
             logger.error(f"Agent {self.name} step failed: {e}")
@@ -113,7 +116,7 @@ class Agent(Actor):
                     "error": str(e)
                 })
 
-    async def _execute_tool(self, tool_call: Dict, origin_sender: Optional[str], correlation_id: Optional[str] = None):
+    async def _execute_tool(self, tool_call: Dict, correlation_id: Optional[str] = None) -> bool:
         func = tool_call["function"]
         name = func["name"]
         args = json.loads(func["arguments"])
@@ -185,8 +188,8 @@ class Agent(Actor):
                     "from": self.name,
                     "correlation_id": correlation_id
                 })
-                # We return here, because result will come back as a message "SystemCallResult"
-                return 
+                # Result will arrive as a separate SystemCallResult event and continue loop there.
+                return False
 
             elif name == "set_conversation_title":
                 result = "Title set (mock)"
@@ -198,11 +201,10 @@ class Agent(Actor):
             result = f"Error executing {name}: {e}"
 
         if result is not None:
-             self.add_tool_call_result(tool_id, result, name)
-             # If we got a result, we should probably continue the loop immediately?
-             # For simplicity, we just add result. The `_run_step_loop` logic needs to decide whether to continue.
-             # In this simple version, let's just trigger a re-step if we have local results.
-             asyncio.create_task(self._run_step_loop(origin_sender, correlation_id)) 
+            self.add_tool_call_result(tool_id, result, name)
+            return True
+
+        return True
             
     def add_message(self, role: str, content: str, name: str = None):
         msg = {"role": role, "content": content}
@@ -235,6 +237,29 @@ class Agent(Actor):
             "content": content
         })
 
+
+    def _safe_tail_index(self, min_tail: int) -> int:
+        """Find a split index that keeps the latest messages while preserving tool-call pairs."""
+        if len(self.messages) <= min_tail + 1:
+            return 1
+
+        split_idx = max(1, len(self.messages) - min_tail)
+        while split_idx < len(self.messages):
+            msg = self.messages[split_idx]
+            prev = self.messages[split_idx - 1] if split_idx > 0 else None
+
+            if msg.get("role") == "tool":
+                split_idx += 1
+                continue
+
+            if prev and prev.get("role") == "assistant" and prev.get("tool_calls"):
+                split_idx += 1
+                continue
+
+            break
+
+        return min(split_idx, len(self.messages))
+
     async def compress_memory(self):
         """Compresses history and generates reflection."""
         if len(self.messages) < 15:
@@ -242,9 +267,10 @@ class Agent(Actor):
 
         logger.info(f"[{self.name}] Compressing memory...")
         
-        # Keep System Prompt (0) and last 5 messages
-        to_compress = self.messages[1:-5]
-        keep = self.messages[-5:]
+        # Keep System Prompt (0) and a safe tail that doesn't split tool-call pairs
+        preserve_tail = self._safe_tail_index(5)
+        to_compress = self.messages[1:preserve_tail]
+        keep = self.messages[preserve_tail:]
         
         if not to_compress:
             return

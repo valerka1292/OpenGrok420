@@ -11,7 +11,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 from grok_team.kernel import Kernel
 from grok_team.agent import Agent
@@ -70,8 +70,10 @@ async def shutdown_event():
 
 
 class ChatRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
     message: str
-    temperatures: dict[str, float] = {}
+    temperatures: dict[str, float] = Field(default_factory=dict)
     conversation_id: str | None = None
 
 
@@ -114,7 +116,7 @@ async def delete_conversation(conversation_id: str):
 
 @app.post('/api/chat')
 async def chat_stream(req: ChatRequest):
-    """SSE endpoint: streams NDJSON events from the Kernel EventBus."""
+    """SSE endpoint: streams JSON payloads over Server-Sent Events from the Kernel EventBus."""
 
     async with history_lock:
         conversation = await history_store.get_or_create(req.conversation_id)
@@ -127,7 +129,20 @@ async def chat_stream(req: ChatRequest):
     # Identify a "reply channel" for this request
     request_id = f"req_{int(time.time()*1000)}"
     correlation_id = request_id
+
+    # Apply per-agent temperatures from the client request.
+    for agent_name, value in req.temperatures.items():
+        agent = KERNEL.actors.get(agent_name)
+        if agent is None:
+            continue
+        try:
+            agent.temperature = max(0.0, min(1.0, float(value)))
+        except (TypeError, ValueError):
+            continue
     
+    def _sse(event: dict) -> str:
+        return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
     async def event_generator():
         assistant_tokens: list[str] = [] 
         assistant_thoughts: list[dict] = []
@@ -144,15 +159,19 @@ async def chat_stream(req: ChatRequest):
             elif event.get("target") == request_id:
                  await response_queue.put(event)
 
-        KERNEL.event_bus.subscribe("TaskCompleted", on_event)
-        KERNEL.event_bus.subscribe("TaskSubmitted", on_event)
-        KERNEL.event_bus.subscribe("TaskFailed", on_event)
-        KERNEL.event_bus.subscribe("SystemCall", on_event)
-        KERNEL.event_bus.subscribe("ToolUse", on_event) 
-        KERNEL.event_bus.subscribe("ArtifactCreated", on_event)
-        KERNEL.event_bus.subscribe("MemoryCompressed", on_event)
-        KERNEL.event_bus.subscribe("AgentSpawned", on_event)
-        KERNEL.event_bus.subscribe("AgentStopped", on_event)
+        topics = [
+            "TaskCompleted",
+            "TaskSubmitted",
+            "TaskFailed",
+            "SystemCall",
+            "ToolUse",
+            "ArtifactCreated",
+            "MemoryCompressed",
+            "AgentSpawned",
+            "AgentStopped",
+        ]
+        for topic in topics:
+            KERNEL.event_bus.subscribe(topic, on_event)
 
         
         # Inject User Message into Leader
@@ -165,15 +184,15 @@ async def chat_stream(req: ChatRequest):
         })
         
         try:
-            yield json.dumps({'type': 'conversation', 'conversation_id': conversation.id}, ensure_ascii=False) + '\n'
-            yield json.dumps({'type': 'status', 'content': 'Thinking...'}, ensure_ascii=False) + '\n'
+            yield _sse({'type': 'conversation', 'conversation_id': conversation.id})
+            yield _sse({'type': 'status', 'content': 'Thinking...'})
 
             while True:
                 # Wait for events with a timeout
                 try:
                     event = await asyncio.wait_for(response_queue.get(), timeout=60.0) # 60s timeout for demo
                 except asyncio.TimeoutError:
-                    yield json.dumps({'type': 'error', 'content': 'Timeout waiting for response'}, ensure_ascii=False) + '\n'
+                    yield _sse({'type': 'error', 'content': 'Timeout waiting for response'})
                     break
 
                 event_type = event.get("type")
@@ -184,7 +203,7 @@ async def chat_stream(req: ChatRequest):
                     if sender == LEADER_NAME or event.get("target") == request_id:
                         content = event.get("content")
                         if content:
-                             yield json.dumps({'type': 'token', 'content': content}, ensure_ascii=False) + '\n'
+                             yield _sse({'type': 'token', 'content': content})
                              assistant_tokens.append(content)
                              # Break only if it's the final answer from Leader?
                              # With Agent OS, we might get multiple completions. 
@@ -197,63 +216,50 @@ async def chat_stream(req: ChatRequest):
                     content = event.get("content")
                     target = event.get("target", "unknown")
                     if sender != request_id:
-                        yield json.dumps({
-                            'type': 'chatroom_send', 
-                            'agent': sender, 
-                            'content': content, 
-                            'to': target
-                        }, ensure_ascii=False) + '\n'
+                        event_payload = {
+                            'type': 'chatroom_send',
+                            'agent': sender,
+                            'content': content,
+                            'to': target,
+                        }
+                        assistant_thoughts.append(event_payload)
+                        yield _sse(event_payload)
                         
                 elif event_type == "SystemCall":
-                    yield json.dumps({
-                        'type': 'thought', 
-                        'agent': sender, 
-                        'content': f"System Call: {event.get('command')}"
-                    }, ensure_ascii=False) + '\n'
+                    event_payload = {'type': 'thought', 'agent': sender, 'content': f"System Call: {event.get('command')}"}
+                    assistant_thoughts.append(event_payload)
+                    yield _sse(event_payload)
 
                 elif event_type == "ToolUse":
                      args_str = json.dumps(event.get('args', {}), ensure_ascii=False)
-                     yield json.dumps({
-                         'type': 'tool_use', 
-                         'agent': sender, 
-                         'tool': event.get('tool'),
-                         'query': args_str
-                     }, ensure_ascii=False) + '\n'
+                     event_payload = {'type': 'tool_use', 'agent': sender, 'tool': event.get('tool'), 'query': args_str}
+                     assistant_thoughts.append(event_payload)
+                     yield _sse(event_payload)
 
                 elif event_type == "ArtifactCreated":
-                     yield json.dumps({
-                         'type': 'thought',
-                         'agent': sender,
-                         'content': f"📦 Created Artifact {event.get('artifact_id')}"
-                     }, ensure_ascii=False) + '\n'
+                     event_payload = {'type': 'thought', 'agent': sender, 'content': f"📦 Created Artifact {event.get('artifact_id')}"}
+                     assistant_thoughts.append(event_payload)
+                     yield _sse(event_payload)
 
                 elif event_type == "MemoryCompressed":
-                     yield json.dumps({
-                         'type': 'thought',
-                         'agent': sender,
-                         'content': f"🧠 Memory Compressed"
-                     }, ensure_ascii=False) + '\n'
+                     event_payload = {'type': 'thought', 'agent': sender, 'content': '🧠 Memory Compressed'}
+                     assistant_thoughts.append(event_payload)
+                     yield _sse(event_payload)
 
                 elif event_type == "AgentSpawned":
-                     yield json.dumps({
-                         'type': 'thought',
-                         'agent': "Kernel",
-                         'content': f"✨ Spawned Agent: {event.get('actor')}"
-                     }, ensure_ascii=False) + '\n'
+                     event_payload = {'type': 'thought', 'agent': 'Kernel', 'content': f"✨ Spawned Agent: {event.get('actor')}"}
+                     assistant_thoughts.append(event_payload)
+                     yield _sse(event_payload)
 
                 elif event_type == "AgentStopped":
-                     yield json.dumps({
-                         'type': 'thought',
-                         'agent': "Kernel",
-                         'content': f"💀 Stopped Agent: {event.get('actor')}"
-                     }, ensure_ascii=False) + '\n'
+                     event_payload = {'type': 'thought', 'agent': 'Kernel', 'content': f"💀 Stopped Agent: {event.get('actor')}"}
+                     assistant_thoughts.append(event_payload)
+                     yield _sse(event_payload)
                      
                 elif event_type == "TaskFailed":
-                     yield json.dumps({
-                         'type': 'thought', # Display as thought to avoid breaking the chat
-                         'agent': sender,
-                         'content': f"❌ Error: {event.get('error')}"
-                     }, ensure_ascii=False) + '\n'
+                     event_payload = {'type': 'thought', 'agent': sender, 'content': f"❌ Error: {event.get('error')}"}
+                     assistant_thoughts.append(event_payload)
+                     yield _sse(event_payload)
 
 
             # Done
@@ -269,17 +275,14 @@ async def chat_stream(req: ChatRequest):
                     duration=duration,
                 ))
             
-            yield json.dumps({'type': 'done'}) + '\n'
+            yield _sse({'type': 'done'})
 
         except Exception as e:
-            yield json.dumps({'type': 'error', 'content': str(e)}, ensure_ascii=False) + '\n'
-            yield json.dumps({'type': 'done'}) + '\n'
+            yield _sse({'type': 'error', 'content': str(e)})
+            yield _sse({'type': 'done'})
         finally:
-            # Cleanup subscription? EventBus implementation above didn't have unsubscribe. 
-            # Ideally we should add unsubscribe. 
-            # For now, the `on_event` closure will leak if we don't remove it.
-            # Post-task: Add unsubscribe to EventBus.
-            pass
+            for topic in topics:
+                KERNEL.event_bus.unsubscribe(topic, on_event)
 
     return StreamingResponse(
         event_generator(),
