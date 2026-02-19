@@ -117,7 +117,7 @@ async def chat_stream(req: ChatRequest):
             yield json.dumps({'type': 'conversation', 'conversation_id': conversation.id}, ensure_ascii=False) + '\n'
             async for event in orchestrator.run_stream(req.message, req.temperatures, require_title_tool=was_new_conversation):
                 event_type = event.get('type')
-                if event_type in {'thought', 'tool_use', 'chatroom_send', 'status', 'guard_prompt'}:
+                if event_type in {'thought', 'tool_use', 'chatroom_send', 'status'}:
                     assistant_thoughts.append(event)
                 elif event_type == 'token' and event.get('content'):
                     assistant_tokens.append(str(event.get('content')))
