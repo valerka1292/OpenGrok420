@@ -1,10 +1,10 @@
 @import "tailwindcss";
 
 :root {
-  --bg-global:#09090b;--bg-surface-1:#18181b;--bg-surface-2:#202024;--bg-surface-3:#27272a;--bg-elevated:#18181b;--bg-overlay:rgba(9,9,11,.82);
-  --border-subtle:#27272a;--border-default:#3f3f46;--border-strong:#52525b;--border-focus:rgba(59,130,246,.55);
-  --text-primary:#fafafa;--text-secondary:#a1a1aa;--text-tertiary:#71717a;--text-disabled:#52525b;
-  --agent-grok:#10b981;--agent-grok-dim:rgba(16,185,129,.15);--agent-harper:#d946ef;--agent-harper-dim:rgba(217,70,239,.15);--agent-benjamin:#60a5fa;--agent-benjamin-dim:rgba(96,165,250,.15);--agent-lucas:#fb7185;--agent-lucas-dim:rgba(251,113,133,.15);
+  --bg-global:#020617;--bg-surface-1:#0f172a;--bg-surface-2:#1e293b;--bg-surface-3:#334155;--bg-elevated:#0f172a;--bg-overlay:rgba(2,6,23,.82);
+  --border-subtle:#1e293b;--border-default:#3f3f46;--border-strong:#52525b;--border-focus:rgba(59,130,246,.55);
+  --text-primary:#fafafa;--text-secondary:#cbd5e1;--text-tertiary:#94a3b8;--text-disabled:#52525b;
+  --agent-grok:#14b8a6;--agent-grok-dim:rgba(20,184,166,.15);--agent-harper:#c084fc;--agent-harper-dim:rgba(192,132,252,.15);--agent-benjamin:#38bdf8;--agent-benjamin-dim:rgba(56,189,248,.15);--agent-lucas:#fb923c;--agent-lucas-dim:rgba(251,146,60,.15);
   --color-success:#10b981;--color-warning:#f59e0b;--color-error:#ef4444;--color-info:#3b82f6;
 }
 
