@@ -173,7 +173,8 @@ async def chat_stream(req: ChatRequest):
         for topic in topics:
             KERNEL.event_bus.subscribe(topic, on_event)
 
-        
+        KERNEL.event_bus.register_actor(request_id, response_queue)
+
         # Inject User Message into Leader
         # We tell the leader this message comes from "User" (or our request_id if we want routing back)
         await KERNEL.actors[LEADER_NAME].inbox.put({
@@ -205,11 +206,9 @@ async def chat_stream(req: ChatRequest):
                         if content:
                              yield _sse({'type': 'token', 'content': content})
                              assistant_tokens.append(content)
-                             # Break only if it's the final answer from Leader?
-                             # With Agent OS, we might get multiple completions. 
-                             # For now, we assume Leader's completion is final.
-                             if sender == LEADER_NAME:
-                                 break 
+                             # End stream if response is addressed to this request.
+                             if sender == LEADER_NAME or event.get("target") == request_id:
+                                 break
                              
                 elif event_type == "TaskSubmitted":
                     # Thought/Delegation -> chatroom_send
@@ -283,6 +282,7 @@ async def chat_stream(req: ChatRequest):
         finally:
             for topic in topics:
                 KERNEL.event_bus.unsubscribe(topic, on_event)
+            KERNEL.event_bus._actor_inboxes.pop(request_id, None)
 
     return StreamingResponse(
         event_generator(),

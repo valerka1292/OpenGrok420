@@ -69,7 +69,7 @@ class Agent(Actor):
             sender = message.get("from")
             content = message.get("content")
             self.add_message("user", f"[Result from {sender}]: {content}")
-            await self._run_step_loop(sender, correlation_id) # Continue thinking with new info
+            await self._run_step_loop(correlation_id, correlation_id) # Continue thinking with new info and answer request initiator
 
         elif msg_type == "SystemCallResult":
             # Handle result of spawn/kill etc
@@ -152,7 +152,9 @@ class Agent(Actor):
                         await self.send(t, payload)
                 else:
                     await self.send(target, payload)
-                result = f"Message sent to {target}"
+                result = f"Message sent to {target}. Waiting for reply..."
+                self.add_tool_call_result(tool_id, result, name)
+                return False
                 
             elif name == "web_search":
                 res = await execute_web_search(args["query"], args.get("num_results", 10))
