@@ -60,7 +60,7 @@ class Orchestrator:
                 for tool_call in tool_calls:
                     await self._handle_tool_call(leader, tool_call)
 
-                if any(tc.get("function", {}).get("name") not in {"chatroom_send", "wait"} for tc in tool_calls):
+                if self._leader_needs_follow_up_after_tools(leader, tool_calls, active_tasks):
                     leader_has_pending_follow_up = True
 
             self._launch_ready_agents(active_tasks)
@@ -87,7 +87,9 @@ class Orchestrator:
             if not leader_has_pending_follow_up and not self._has_pending_agent_mailboxes():
                 break
 
-        return "Error: Session budget reached without final answer."
+        if session_steps >= self.MAX_SESSION_STEPS:
+            return "Error: Session budget reached without final answer."
+        return "Error: Orchestrator loop terminated prematurely."
 
     async def run_stream(
         self,
@@ -151,7 +153,7 @@ class Orchestrator:
                     async for ev in self._handle_tool_call_stream(leader, tool_call):
                         yield ev
 
-                if any(tc.get("function", {}).get("name") not in {"chatroom_send", "wait"} for tc in tool_calls):
+                if self._leader_needs_follow_up_after_tools(leader, tool_calls, active_tasks):
                     leader_has_pending_follow_up = True
 
             self._launch_ready_agents(active_tasks, stream_mode=True)
@@ -177,8 +179,51 @@ class Orchestrator:
             if not leader_has_pending_follow_up and not self._has_pending_agent_mailboxes():
                 break
 
-        yield {"type": "token", "content": "Error: Session budget reached without final answer."}
+        if session_steps >= self.MAX_SESSION_STEPS:
+            error_text = "Error: Session budget reached without final answer."
+        else:
+            error_text = "Error: Orchestrator loop terminated prematurely."
+        yield {"type": "token", "content": error_text}
         yield {"type": "done"}
+
+    def _leader_needs_follow_up_after_tools(
+        self,
+        leader: Agent,
+        tool_calls: List[Dict[str, Any]],
+        active_tasks: Dict[str, asyncio.Task],
+    ) -> bool:
+        has_active_agents = bool(active_tasks) or self._has_pending_agent_mailboxes()
+        should_follow_up = False
+
+        for tool_call in tool_calls:
+            func_name = tool_call.get("function", {}).get("name")
+            tool_call_id = tool_call.get("id", "call_unknown")
+
+            if func_name not in {"chatroom_send", "wait"}:
+                should_follow_up = True
+
+            if self._tool_call_had_error(leader, tool_call_id):
+                should_follow_up = True
+
+            if func_name == "wait" and not has_active_agents:
+                leader.add_message(
+                    "system",
+                    "You called `wait`, but no teammates have pending tasks. "
+                    "You must use `chatroom_send` first or provide a final answer.",
+                )
+                should_follow_up = True
+
+        return should_follow_up
+
+    def _tool_call_had_error(self, caller: Agent, tool_call_id: str) -> bool:
+        for message in reversed(caller.messages):
+            if message.get("role") != "tool":
+                continue
+            if message.get("tool_call_id") != tool_call_id:
+                continue
+            content = str(message.get("content") or "")
+            return content.startswith("Error:")
+        return False
 
     async def _cancel_active_tasks(self, active_tasks: Dict[str, asyncio.Task]) -> None:
         if not active_tasks:
@@ -399,10 +444,6 @@ class Orchestrator:
                 caller.add_tool_call_result(tool_call_id, "; ".join(status_parts), func_name)
             else:
                 caller.add_tool_call_result(tool_call_id, f"Error: No valid recipients found in {recipients}.", func_name)
-
-        elif func_name == "wait":
-            caller.add_tool_call_result(tool_call_id, "", func_name)
-            return
 
         elif func_name == "wait":
             caller.add_tool_call_result(tool_call_id, "", func_name)
