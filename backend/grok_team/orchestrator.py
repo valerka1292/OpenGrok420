@@ -82,6 +82,12 @@ class Orchestrator:
                     else:
                         await self._cancel_active_tasks(active_tasks)
                         return content
+                elif not tool_calls and not content:
+                    leader_has_pending_follow_up = True
+                    leader.add_message(
+                        "system",
+                        "Error: You returned an empty response. You must provide a final answer or call a tool.",
+                    )
 
                 for tool_call in tool_calls:
                     await self._handle_tool_call(leader, tool_call)
@@ -99,6 +105,7 @@ class Orchestrator:
                 finished = {name for name, task in active_tasks.items() if task in done}
                 for name in finished:
                     task = active_tasks.pop(name)
+                    self._leader_pending_targets.discard(name)
                     try:
                         await task
                     except Exception as exc:
@@ -179,6 +186,12 @@ class Orchestrator:
                             await asyncio.sleep(0.02)
                         yield {"type": "done"}
                         return
+                elif not tool_calls and not content:
+                    leader_has_pending_follow_up = True
+                    leader.add_message(
+                        "system",
+                        "Error: You returned an empty response. You must provide a final answer or call a tool.",
+                    )
 
                 for tool_call in tool_calls:
                     async for ev in self._handle_tool_call_stream(leader, tool_call):
@@ -197,6 +210,7 @@ class Orchestrator:
                 finished = {name for name, task in active_tasks.items() if task in done}
                 for name in finished:
                     task = active_tasks.pop(name)
+                    self._leader_pending_targets.discard(name)
                     try:
                         events = await task
                         for ev in events:
@@ -471,7 +485,9 @@ class Orchestrator:
                 if sent_info:
                     status_parts.append(f"sent to {', '.join(sent_info)}")
                 if skipped_pending:
-                    status_parts.append(f"skipped pending: {', '.join(skipped_pending)}")
+                    status_parts.append(
+                        f"Error: skipped pending (already waiting): {', '.join(skipped_pending)}"
+                    )
                 caller.add_tool_call_result(tool_call_id, "; ".join(status_parts), func_name)
             else:
                 caller.add_tool_call_result(tool_call_id, f"Error: No valid recipients found in {recipients}.", func_name)
@@ -541,7 +557,9 @@ class Orchestrator:
                 if sent_info:
                     status_parts.append(f"sent to {', '.join(sent_info)}")
                 if skipped_pending:
-                    status_parts.append(f"skipped pending: {', '.join(skipped_pending)}")
+                    status_parts.append(
+                        f"Error: skipped pending (already waiting): {', '.join(skipped_pending)}"
+                    )
                 caller.add_tool_call_result(tool_call_id, "; ".join(status_parts), func_name)
             else:
                 caller.add_tool_call_result(tool_call_id, f"Error: No valid recipients found in {recipients}.", func_name)
