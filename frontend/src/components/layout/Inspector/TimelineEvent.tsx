@@ -1,5 +1,6 @@
 import { ArrowRight, Brain, Hammer, Lock, Megaphone, PauseCircle, TriangleAlert } from 'lucide-react';
 import { Thought } from '../../../store/useChat';
+import useChat from '../../../store/useChat';
 import { getAgentColor, getThoughtGradientStyle, parseRecipients } from '../../../lib/log-visuals';
 
 function getEventTitle(event: Thought) {
@@ -11,6 +12,7 @@ function getEventTitle(event: Thought) {
 }
 
 export default function TimelineEvent({ event }: { event: Thought }) {
+  const { resolveGuardPrompt, isGenerating } = useChat();
   const Icon = event.type === 'tool_use'
     ? Hammer
     : event.type === 'chatroom_send'
@@ -59,7 +61,27 @@ export default function TimelineEvent({ event }: { event: Thought }) {
           <div className="text-text-primary/90 leading-relaxed font-mono mt-1.5">{event.content || '...'}</div>
         </div>
       ) : (
-        <div className="text-text-primary/90 leading-relaxed font-mono mt-1.5">{event.content || event.query || event.tool || '...'}</div>
+        <div className="space-y-2">
+          <div className="text-text-primary/90 leading-relaxed font-mono mt-1.5">{event.content || event.query || event.tool || '...'}</div>
+          {event.type === 'guard_prompt' && isGenerating ? (
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => resolveGuardPrompt('yes')}
+                className="px-2 py-1 rounded border border-emerald-400/40 bg-emerald-500/15 text-emerald-200 hover:bg-emerald-500/25"
+              >
+                Да
+              </button>
+              <button
+                type="button"
+                onClick={() => resolveGuardPrompt('no')}
+                className="px-2 py-1 rounded border border-rose-400/40 bg-rose-500/15 text-rose-200 hover:bg-rose-500/25"
+              >
+                Нет
+              </button>
+            </div>
+          ) : null}
+        </div>
       )}
     </article>
   );
