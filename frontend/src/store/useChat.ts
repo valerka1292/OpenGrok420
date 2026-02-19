@@ -77,6 +77,7 @@ export interface ChatState {
   pendingGuardPrompt: GuardPromptState | null;
   queuedPrompt: string | null;
   queuedPromptAutoSend: boolean;
+  forceStopGeneration: boolean;
   selectedMessageIndex: number | null;
 
   setAgentTemperature: (agent: string, temp: number) => void;
@@ -116,6 +117,7 @@ const useChat = create<ChatState>((set, get) => ({
   pendingGuardPrompt: null,
   queuedPrompt: null,
   queuedPromptAutoSend: false,
+  forceStopGeneration: false,
   selectedMessageIndex: null,
   temperature: {
     Grok: 0.7,
@@ -173,6 +175,7 @@ const useChat = create<ChatState>((set, get) => ({
     pendingGuardPrompt: null,
     queuedPrompt: null,
     queuedPromptAutoSend: false,
+    forceStopGeneration: false,
     selectedMessageIndex: null,
   }),
 
@@ -183,6 +186,7 @@ const useChat = create<ChatState>((set, get) => ({
     currentStatus: 'Генерация ответа…',
     lastError: '',
     startTime: Date.now(),
+    forceStopGeneration: false,
   }),
 
   stopGeneration: (errorMessage) => {
@@ -203,12 +207,14 @@ const useChat = create<ChatState>((set, get) => ({
       : '';
 
     const queuedPrompt = decision === 'yes'
-      ? `${base} Продолжи выполнение с сохранением текущего контекста.`
-      : `${base} Останови его и верни ответ лидера с краткой сводкой.${intermediateBlock}`;
+      ? `${base} Пользователь нажал "Да" в GUARD PROMPT. Сбрось лимит для агента ${guard.agent} и продолжи выполнение с сохранением текущего контекста.`
+      : `${base} Пользователь нажал "Нет" в GUARD PROMPT. Останови агента ${guard.agent} и отправь лидеру сообщение об ошибке с краткой сводкой.${intermediateBlock}`;
 
     set({
       queuedPrompt,
+      queuedPromptAutoSend: true,
       pendingGuardPrompt: null,
+      forceStopGeneration: true,
       currentStatus: decision === 'yes' ? 'Подтверждено продолжение работы…' : 'Запрошено завершение по лимиту…',
     });
   },
@@ -319,6 +325,7 @@ const useChat = create<ChatState>((set, get) => ({
       pendingGuardPrompt: null,
       queuedPrompt: null,
       queuedPromptAutoSend: false,
+      forceStopGeneration: false,
       selectedMessageIndex: null,
     });
   },

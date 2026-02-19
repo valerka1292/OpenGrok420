@@ -31,6 +31,7 @@ export default function InputArea() {
         clearMessages,
         currentConversationId,
         consumeQueuedPrompt,
+        forceStopGeneration,
     } = useChat();
 
     const canSubmit = useMemo(() => input.trim().length > 0 && !isGenerating, [input, isGenerating]);
@@ -159,6 +160,13 @@ export default function InputArea() {
 
         await sendMessage(userMsg);
     };
+
+
+    useEffect(() => {
+        if (!forceStopGeneration || !isGenerating) return;
+        abortControllerRef.current?.abort();
+        stopGeneration('Ожидание решения по guard prompt');
+    }, [forceStopGeneration, isGenerating, stopGeneration]);
 
     useEffect(() => {
         if (isGenerating) return;
