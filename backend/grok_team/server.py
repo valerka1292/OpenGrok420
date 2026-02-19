@@ -13,10 +13,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from grok_team.orchestrator import Orchestrator
+from grok_team.kernel import Kernel
+from grok_team.agent import Agent
+from grok_team.config import ALL_AGENT_NAMES, LEADER_NAME
 from grok_team.history import SQLiteHistoryStore, StoredMessage
 
 app = FastAPI(title="Grok Team API")
+KERNEL = Kernel()
 
 extra_origins = [
     origin.strip()
@@ -37,13 +40,32 @@ app.add_middleware(
     allow_headers=['*'],
 )
 
+from grok_team.history_writer import HistoryWriter
+
 HISTORY_PATH = Path(os.getenv('HISTORY_STORE_PATH', 'backend/data/history.db'))
 history_store = SQLiteHistoryStore(HISTORY_PATH)
+history_writer = HistoryWriter(history_store)
 history_lock = asyncio.Lock()
 
 @app.on_event('startup')
 async def startup_event():
+    HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
     await history_store.initialize()
+    await history_writer.start()
+    
+    # Initialize Agents
+    for name in ALL_AGENT_NAMES:
+        # Check if already exists to avoid dupes on reload
+        if name not in KERNEL.actors:
+            agent = Agent(name, KERNEL.event_bus)
+            KERNEL.register_actor(agent)
+            
+    await KERNEL.start()
+
+@app.on_event('shutdown')
+async def shutdown_event():
+    await KERNEL.stop()
+    await history_writer.stop()
 
 
 
@@ -92,56 +114,172 @@ async def delete_conversation(conversation_id: str):
 
 @app.post('/api/chat')
 async def chat_stream(req: ChatRequest):
-    """SSE endpoint: streams NDJSON events from the multi-agent orchestrator."""
-    orchestrator = Orchestrator()
+    """SSE endpoint: streams NDJSON events from the Kernel EventBus."""
 
     async with history_lock:
         conversation = await history_store.get_or_create(req.conversation_id)
-        was_new_conversation = len(conversation.messages) == 0
-        previous_messages = [
-            {"role": msg.role, "content": msg.content}
-            for msg in conversation.messages
-            if msg.role in {"user", "assistant"}
-        ]
-        await history_store.add_message(conversation.id, StoredMessage(role='user', content=req.message))
+        # We might need to restore agent state from DB here in a real unified system
+        # For now, we assume agents are running in memory (Note: this is not stateless between requests in this simple integration)
+        # But we DO need to log the user message
+        # Use background writer
+        await history_writer.add_message(conversation.id, StoredMessage(role='user', content=req.message))
 
-    orchestrator.restore_leader_history(previous_messages)
-
+    # Identify a "reply channel" for this request
+    request_id = f"req_{int(time.time()*1000)}"
+    correlation_id = request_id
+    
     async def event_generator():
-        assistant_tokens: list[str] = []
+        assistant_tokens: list[str] = [] 
         assistant_thoughts: list[dict] = []
         start = time.perf_counter()
-        conversation_saved = False
+        
+        # Queue to capture events for this specific request
+        response_queue = asyncio.Queue()
+        
+        async def on_event(event):
+            # We filter for events relevant to this request via correlation_id
+            if event.get("correlation_id") == correlation_id:
+                 await response_queue.put(event)
+            # Fallback for legacy or direct targets (if target matches request_id)
+            elif event.get("target") == request_id:
+                 await response_queue.put(event)
 
+        KERNEL.event_bus.subscribe("TaskCompleted", on_event)
+        KERNEL.event_bus.subscribe("TaskSubmitted", on_event)
+        KERNEL.event_bus.subscribe("TaskFailed", on_event)
+        KERNEL.event_bus.subscribe("SystemCall", on_event)
+        KERNEL.event_bus.subscribe("ToolUse", on_event) 
+        KERNEL.event_bus.subscribe("ArtifactCreated", on_event)
+        KERNEL.event_bus.subscribe("MemoryCompressed", on_event)
+        KERNEL.event_bus.subscribe("AgentSpawned", on_event)
+        KERNEL.event_bus.subscribe("AgentStopped", on_event)
+
+        
+        # Inject User Message into Leader
+        # We tell the leader this message comes from "User" (or our request_id if we want routing back)
+        await KERNEL.actors[LEADER_NAME].inbox.put({
+            "type": "TaskSubmitted",
+            "from": request_id, 
+            "correlation_id": correlation_id,
+            "content": req.message
+        })
+        
         try:
             yield json.dumps({'type': 'conversation', 'conversation_id': conversation.id}, ensure_ascii=False) + '\n'
-            async for event in orchestrator.run_stream(req.message, req.temperatures, require_title_tool=was_new_conversation):
-                event_type = event.get('type')
-                if event_type in {'thought', 'tool_use', 'chatroom_send', 'status'}:
-                    assistant_thoughts.append(event)
-                elif event_type == 'token' and event.get('content'):
-                    assistant_tokens.append(str(event.get('content')))
-                elif event_type == 'conversation_title' and event.get('title'):
-                    async with history_lock:
-                        await history_store.update_title(conversation.id, str(event.get('title')))
+            yield json.dumps({'type': 'status', 'content': 'Thinking...'}, ensure_ascii=False) + '\n'
 
-                if event_type == 'done' and not conversation_saved:
-                    assistant_text = ''.join(assistant_tokens).strip()
-                    if assistant_text:
-                        duration = round(time.perf_counter() - start, 2)
-                        async with history_lock:
-                            await history_store.add_message(conversation.id, StoredMessage(
-                                role='assistant',
-                                content=assistant_text,
-                                thoughts=assistant_thoughts,
-                                duration=duration,
-                            ))
-                    conversation_saved = True
+            while True:
+                # Wait for events with a timeout
+                try:
+                    event = await asyncio.wait_for(response_queue.get(), timeout=60.0) # 60s timeout for demo
+                except asyncio.TimeoutError:
+                    yield json.dumps({'type': 'error', 'content': 'Timeout waiting for response'}, ensure_ascii=False) + '\n'
+                    break
 
-                yield json.dumps(event, ensure_ascii=False) + '\n'
+                event_type = event.get("type")
+                sender = event.get("from", event.get("actor", "unknown"))
+                
+                if event_type == "TaskCompleted":
+                    # If this is the final answer addressed to us
+                    if sender == LEADER_NAME or event.get("target") == request_id:
+                        content = event.get("content")
+                        if content:
+                             yield json.dumps({'type': 'token', 'content': content}, ensure_ascii=False) + '\n'
+                             assistant_tokens.append(content)
+                             # Break only if it's the final answer from Leader?
+                             # With Agent OS, we might get multiple completions. 
+                             # For now, we assume Leader's completion is final.
+                             if sender == LEADER_NAME:
+                                 break 
+                             
+                elif event_type == "TaskSubmitted":
+                    # Thought/Delegation -> chatroom_send
+                    content = event.get("content")
+                    target = event.get("target", "unknown")
+                    if sender != request_id:
+                        yield json.dumps({
+                            'type': 'chatroom_send', 
+                            'agent': sender, 
+                            'content': content, 
+                            'to': target
+                        }, ensure_ascii=False) + '\n'
+                        
+                elif event_type == "SystemCall":
+                    yield json.dumps({
+                        'type': 'thought', 
+                        'agent': sender, 
+                        'content': f"System Call: {event.get('command')}"
+                    }, ensure_ascii=False) + '\n'
+
+                elif event_type == "ToolUse":
+                     args_str = json.dumps(event.get('args', {}), ensure_ascii=False)
+                     yield json.dumps({
+                         'type': 'tool_use', 
+                         'agent': sender, 
+                         'tool': event.get('tool'),
+                         'query': args_str
+                     }, ensure_ascii=False) + '\n'
+
+                elif event_type == "ArtifactCreated":
+                     yield json.dumps({
+                         'type': 'thought',
+                         'agent': sender,
+                         'content': f"📦 Created Artifact {event.get('artifact_id')}"
+                     }, ensure_ascii=False) + '\n'
+
+                elif event_type == "MemoryCompressed":
+                     yield json.dumps({
+                         'type': 'thought',
+                         'agent': sender,
+                         'content': f"🧠 Memory Compressed"
+                     }, ensure_ascii=False) + '\n'
+
+                elif event_type == "AgentSpawned":
+                     yield json.dumps({
+                         'type': 'thought',
+                         'agent': "Kernel",
+                         'content': f"✨ Spawned Agent: {event.get('actor')}"
+                     }, ensure_ascii=False) + '\n'
+
+                elif event_type == "AgentStopped":
+                     yield json.dumps({
+                         'type': 'thought',
+                         'agent': "Kernel",
+                         'content': f"💀 Stopped Agent: {event.get('actor')}"
+                     }, ensure_ascii=False) + '\n'
+                     
+                elif event_type == "TaskFailed":
+                     yield json.dumps({
+                         'type': 'thought', # Display as thought to avoid breaking the chat
+                         'agent': sender,
+                         'content': f"❌ Error: {event.get('error')}"
+                     }, ensure_ascii=False) + '\n'
+
+
+            # Done
+            duration = round(time.perf_counter() - start, 2)
+            final_text = "".join(assistant_tokens)
+            
+            if final_text:
+                # Use background writer (no lock needed)
+                await history_writer.add_message(conversation.id, StoredMessage(
+                    role='assistant',
+                    content=final_text,
+                    thoughts=assistant_thoughts,
+                    duration=duration,
+                ))
+            
+            yield json.dumps({'type': 'done'}) + '\n'
+
         except Exception as e:
             yield json.dumps({'type': 'error', 'content': str(e)}, ensure_ascii=False) + '\n'
             yield json.dumps({'type': 'done'}) + '\n'
+        finally:
+            # Cleanup subscription? EventBus implementation above didn't have unsubscribe. 
+            # Ideally we should add unsubscribe. 
+            # For now, the `on_event` closure will leak if we don't remove it.
+            # Post-task: Add unsubscribe to EventBus.
+            pass
 
     return StreamingResponse(
         event_generator(),
@@ -153,6 +291,13 @@ async def chat_stream(req: ChatRequest):
         },
     )
 
+
+@app.get('/api/events')
+async def get_events(limit: int = 100):
+    """Retrieve recent system events from the log."""
+    events = KERNEL.event_logger.get_all_events()
+    # Return last N events
+    return {"events": events[-limit:]}
 
 @app.get('/api/health')
 async def health():

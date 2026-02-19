@@ -1,6 +1,9 @@
 
 import os
 import random
+import json
+import logging
+import asyncio
 from typing import List, Dict, Any, Optional
 from openai import AsyncOpenAI
 from grok_team.config import (
@@ -12,31 +15,195 @@ from grok_team.config import (
 )
 from grok_team.prompts_loader import get_system_prompt
 from grok_team.tools import ALL_TOOLS
+from grok_team.actor import Actor
+from grok_team.event_bus import EventBus
 
-class Agent:
-    def __init__(self, name: str):
-        self.name = name
-        self.system_prompt = get_system_prompt(name, ALL_AGENT_NAMES)
+logger = logging.getLogger(__name__)
+
+class Agent(Actor):
+    def __init__(self, name: str, event_bus: EventBus, system_prompt: Optional[str] = None, temperature: Optional[float] = None, start_budget: int = 10):
+        super().__init__(name, event_bus, start_budget)
+        
+        if system_prompt:
+            self.system_prompt = system_prompt
+        else:
+            self.system_prompt = get_system_prompt(name, ALL_AGENT_NAMES)
+            
         self.messages: List[Dict[str, Any]] = [
             {"role": "system", "content": self.system_prompt}
         ]
-        self.mailbox = []  # Queue for incoming messages from other agents
-
+        
         # Temperature Setting
-        if self.name == LEADER_NAME:
-            self.temperature = 0.6  # Slightly higher for creative delegation
+        if temperature is not None:
+             self.temperature = temperature
+        elif self.name == LEADER_NAME:
+            self.temperature = 0.6
         else:
-            self.temperature = round(random.uniform(0.0, 1.0), 2) # Random (0-1) for creativity
+            self.temperature = round(random.uniform(0.0, 1.0), 2)
             
-        print(f"[System] Agent {self.name} initialized with temperature: {self.temperature}")
+        logger.info(f"Agent {self.name} initialized (temp={self.temperature}, budget={self.budget})")
 
-        # Initialize OpenAI Client asynchronously
         self.client = AsyncOpenAI(
             api_key=OPENAI_API_KEY,
             base_url=OPENAI_BASE_URL
         )
         self.model = OPENAI_MODEL_NAME
 
+    async def handle_message(self, message: Dict[str, Any]):
+        """Event handler for the Agent logic."""
+        msg_type = message.get("type")
+        # Extract correlation ID for tracing
+        correlation_id = message.get("correlation_id") or message.get("id")
+        
+        if msg_type == "TaskSubmitted":
+            content = message.get("content")
+            sender = message.get("from")
+            # Archive user/sender message
+            self.add_message("user", f"[Message from {sender}]: {content}" if sender else content)
+            
+            # Execute step loop (think -> tool -> think ...)
+            await self._run_step_loop(sender, correlation_id)
+                    
+        elif msg_type == "TaskCompleted":
+            # Handle reply from another agent
+            sender = message.get("from")
+            content = message.get("content")
+            self.add_message("user", f"[Result from {sender}]: {content}")
+            await self._run_step_loop(sender, correlation_id) # Continue thinking with new info
+
+        elif msg_type == "SystemCallResult":
+            # Handle result of spawn/kill etc
+            content = message.get("content")
+            tool_call_id = message.get("tool_call_id")
+            # System calls might need their own correlation tracking via tool_call_id
+            if tool_call_id:
+                self.add_tool_call_result(tool_call_id, str(content), "system")
+                await self._run_step_loop(None, correlation_id)
+
+    async def _run_step_loop(self, initial_sender: Optional[str], correlation_id: Optional[str] = None):
+        """Runs the Think -> Act -> Observe loop until final answer or stop."""
+        try:
+            response = await self.step()
+            
+            # 1. If we have content, send it to sender (streaming logic replacement)
+            if response.get("content") and initial_sender:
+                await self.send(initial_sender, {
+                    "type": "TaskCompleted",
+                    "from": self.name,
+                    "correlation_id": correlation_id,
+                    "content": response["content"] # Incremental update?
+                })
+
+            # 2. Handle Tool Calls
+            tool_calls = response.get("tool_calls")
+            if tool_calls:
+                logger.info(f"[{self.name}] Executing {len(tool_calls)} tools in parallel...")
+                tasks = [self._execute_tool(tc, initial_sender, correlation_id) for tc in tool_calls]
+                await asyncio.gather(*tasks)
+                
+                pass # Logic depends on tool type
+
+        except Exception as e:
+            logger.error(f"Agent {self.name} step failed: {e}")
+            if initial_sender:
+                await self.send(initial_sender, {
+                    "type": "TaskFailed",
+                    "from": self.name,
+                    "correlation_id": correlation_id,
+                    "error": str(e)
+                })
+
+    async def _execute_tool(self, tool_call: Dict, origin_sender: Optional[str], correlation_id: Optional[str] = None):
+        func = tool_call["function"]
+        name = func["name"]
+        args = json.loads(func["arguments"])
+        tool_id = tool_call["id"]
+        
+        # Publish ToolUse event for Kernel monitoring (Loop Detection, etc.)
+        await self.event_bus.publish({
+            "type": "ToolUse",
+            "actor": self.name, # Legacy field
+            "from": self.name,
+            "correlation_id": correlation_id,
+            "tool": name,
+            "args": args,
+            "tool_call_id": tool_id
+        })
+        
+        from grok_team.tools import execute_web_search, execute_python_run
+        
+        result = None
+        
+        try:
+            if name == "chatroom_send":
+                target = args.get("to")
+                msg = args.get("message")
+                payload = {
+                    "type": "TaskSubmitted", 
+                    "content": msg, 
+                    "from": self.name,
+                    "correlation_id": correlation_id
+                }
+                if isinstance(target, list):
+                    for t in target:
+                        await self.send(t, payload)
+                else:
+                    await self.send(target, payload)
+                result = f"Message sent to {target}"
+                
+            elif name == "web_search":
+                res = await execute_web_search(args["query"], args.get("num_results", 10))
+                result = str(res)
+                
+            elif name == "read_artifact":
+                from grok_team.tools import read_artifact
+                result = await read_artifact(args.get("artifact_id"), args.get("start", 0), args.get("length", 4000))
+
+            elif name == "python_run":
+                result = await execute_python_run(args["code"])
+                
+            elif name == "start_process":
+                from grok_team.tools import start_process
+                result = await start_process(args["command"])
+            
+            elif name == "read_process_logs":
+                from grok_team.tools import read_process_logs
+                result = await read_process_logs(args["pid"], args.get("lines", 20))
+                
+            elif name == "stop_process":
+                from grok_team.tools import stop_process
+                result = await stop_process(args["pid"])
+                
+            elif name in ["spawn_agent", "kill_agent", "list_agents", "allocate_budget"]:
+                # System calls delegated to Kernel via Bus
+                await self.event_bus.publish({
+                    "type": "SystemCall",
+                    "command": name,
+                    "args": args,
+                    "tool_call_id": tool_id,
+                    "sender": self.name,
+                    "from": self.name,
+                    "correlation_id": correlation_id
+                })
+                # We return here, because result will come back as a message "SystemCallResult"
+                return 
+
+            elif name == "set_conversation_title":
+                result = "Title set (mock)"
+
+            else:
+                result = f"Error: Unknown tool {name}"
+
+        except Exception as e:
+            result = f"Error executing {name}: {e}"
+
+        if result is not None:
+             self.add_tool_call_result(tool_id, result, name)
+             # If we got a result, we should probably continue the loop immediately?
+             # For simplicity, we just add result. The `_run_step_loop` logic needs to decide whether to continue.
+             # In this simple version, let's just trigger a re-step if we have local results.
+             asyncio.create_task(self._run_step_loop(origin_sender, correlation_id)) 
+            
     def add_message(self, role: str, content: str, name: str = None):
         msg = {"role": role, "content": content}
         if name:
@@ -44,6 +211,23 @@ class Agent:
         self.messages.append(msg)
     
     def add_tool_call_result(self, tool_call_id: str, content: str, name: str):
+        # Auto-archive large outputs
+        if len(content) > 4000:
+            from grok_team.artifact_store import GLOBAL_ARTIFACT_STORE
+            artifact_id = GLOBAL_ARTIFACT_STORE.store(content)
+            logger.info(f"[{self.name}] Stored large tool output as artifact {artifact_id}")
+            
+            # Publish event
+            asyncio.create_task(self.event_bus.publish({
+                "type": "ArtifactCreated",
+                "actor": self.name,
+                "from": self.name,
+                "artifact_id": artifact_id,
+                "preview": content[:200]
+            }))
+            
+            content = f"[Large Output Stored. Artifact ID: {artifact_id}. Use `read_artifact` to view.]\nPreview:\n{content[:200]}..."
+
         self.messages.append({
             "role": "tool",
             "tool_call_id": tool_call_id,
@@ -51,94 +235,118 @@ class Agent:
             "content": content
         })
 
-    async def step(
-        self,
-        extra_system_context: Optional[str] = None,
-        allowed_tool_names: Optional[List[str]] = None,
-    ) -> Dict[str, Any]:
+    async def compress_memory(self):
+        """Compresses history and generates reflection."""
+        if len(self.messages) < 15:
+            return
+
+        logger.info(f"[{self.name}] Compressing memory...")
+        
+        # Keep System Prompt (0) and last 5 messages
+        to_compress = self.messages[1:-5]
+        keep = self.messages[-5:]
+        
+        if not to_compress:
+            return
+
+        # Prepare summarization prompt
+        text_to_compress = json.dumps(to_compress, indent=2)
+        summary_prompt = (
+            "Analyze the above conversation history.\n"
+            "1. Summarize the key facts and decisions derived so far.\n"
+            "2. REFLECTION: What is the current plan? What have we finished? What is next?\n"
+            "Output JSON: {\"summary\": \"...\", \"reflection\": \"...\"}"
+        )
+        
+        try:
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": "You are a memory manager."},
+                    {"role": "user", "content": f"History:\n{text_to_compress}\n\n{summary_prompt}"}
+                ],
+                response_format={"type": "json_object"}
+            )
+            result = json.loads(response.choices[0].message.content)
+            summary = result.get("summary", "")
+            reflection = result.get("reflection", "")
+            
+            # Reconstruct history
+            new_history = [self.messages[0]] # System Prompt
+            new_history.append({"role": "system", "content": f"PREVIOUS CONTEXT (Summarized):\n{summary}"})
+            new_history.append({"role": "system", "content": f"REFLECTION (Current Plan):\n{reflection}"})
+            new_history.extend(keep)
+            
+            self.messages = new_history
+            logger.info(f"[{self.name}] Memory compressed. History size: {len(self.messages)}")
+            
+            await self.event_bus.publish({
+                "type": "MemoryCompressed",
+                "actor": self.name,
+                "from": self.name,
+                "summary": summary[:100] + "..."
+            })
+            
+        except Exception as e:
+            logger.error(f"[{self.name}] Memory compression failed: {e}")
+
+    async def step(self, extra_system_context: Optional[str] = None) -> Dict[str, Any]:
         """
-        Executes a step of the agent using the OpenAI API with Streaming (Async).
-        Returns the response message (either text or tool call).
+        Executes a step of the agent using the OpenAI API.
         """
-        print(f"\n[{self.name}] Thinking (temp={self.temperature})...")
+        if self.budget <= 0:
+            logger.warning(f"[{self.name}] Attempted to step with no budget.")
+            return {"role": "assistant", "content": "Error: Budget exhausted."}
+
+        # Check for context limit and compress if needed
+        if len(self.messages) > 20:
+             await self.compress_memory()
+
+        self.budget -= 1
+        logger.info(f"[{self.name}] Thinking... (Budget remaining: {self.budget})")
+        
+        if len(self.messages) > 40:
+             logger.warning(f"[{self.name}] CRITICAL: Context window dangerously full ({len(self.messages)} msgs). Performance may degrade.")
 
         try:
             request_messages = list(self.messages)
             if extra_system_context:
                 request_messages.append({"role": "system", "content": extra_system_context})
 
-            tools = ALL_TOOLS
-            if allowed_tool_names is not None:
-                allowed = set(allowed_tool_names)
-                tools = [tool for tool in ALL_TOOLS if tool.get("function", {}).get("name") in allowed]
-
-            stream = await self.client.chat.completions.create(
+            response_obj = await self.client.chat.completions.create(
                 model=self.model,
                 messages=request_messages,
-                tools=tools,
+                tools=ALL_TOOLS,
                 tool_choice="auto",
-                stream=True,
+                stream=False,
                 temperature=self.temperature,
                 max_tokens=4096
             )
             
-            accumulated_content = ""
-            current_tool_calls = {}
+            message = response_obj.choices[0].message
             
-            print(f"[{self.name} Output]: ", end="", flush=True)
+            # Store response
+            msg_data = {"role": "assistant"}
+            if message.content:
+                msg_data["content"] = message.content
+            if message.tool_calls:
+                msg_data["tool_calls"] = [
+                    {
+                        "id": tc.id,
+                        "type": tc.type,
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments
+                        }
+                    } for tc in message.tool_calls
+                ]
+            self.messages.append(msg_data)
 
-            async for chunk in stream:
-                if not chunk.choices:
-                    continue
-                    
-                delta = chunk.choices[0].delta
-                
-                # Handle Reasoning Content
-                reasoning = getattr(delta, "reasoning_content", None)
-                if reasoning:
-                     print(reasoning, end="", flush=True)
-                
-                if delta.content:
-                    print(delta.content, end="", flush=True)
-                    accumulated_content += delta.content
-                
-                if delta.tool_calls:
-                    for tc in delta.tool_calls:
-                        idx = tc.index
-                        if idx not in current_tool_calls:
-                            current_tool_calls[idx] = {
-                                "id": tc.id,
-                                "type": tc.type,
-                                "function": {"name": "", "arguments": ""}
-                            }
-                        
-                        if tc.id:
-                            current_tool_calls[idx]["id"] = tc.id
-                        if tc.type:
-                            current_tool_calls[idx]["type"] = tc.type
-                        if tc.function:
-                            if tc.function.name:
-                                current_tool_calls[idx]["function"]["name"] += tc.function.name
-                            if tc.function.arguments:
-                                current_tool_calls[idx]["function"]["arguments"] += tc.function.arguments
+            if message.content:
+                logger.info(f"[{self.name}] Says: {message.content[:100]}...")
 
-            print()
-            
-            response = {
-                "role": "assistant",
-                "content": accumulated_content if accumulated_content else None,
-            }
-            
-            if current_tool_calls:
-                response["tool_calls"] = []
-                for idx in sorted(current_tool_calls.keys()):
-                    response["tool_calls"].append(current_tool_calls[idx])
-            
-            return response
+            return msg_data
 
         except Exception as e:
-            print(f"\nError calling OpenAI API for agent {self.name}: {e}")
-            return {
-                "role": "assistant",
-                "content": f"I encountered an error while thinking: {str(e)}"
-            }
+            logger.error(f"Error calling OpenAI API for agent {self.name}: {e}")
+            raise e

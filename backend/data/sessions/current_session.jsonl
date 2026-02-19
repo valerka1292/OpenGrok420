@@ -1,0 +1,11 @@
+{"type": "TaskCompleted", "from": "Worker", "content": "I did the job.", "id": "task_1", "timestamp": "2026-02-19T12:43:51.405317"}
+{"type": "ShadowCritique", "from": "Critic", "target_event_id": "task_1", "content": "Critique of Worker: Valid response.", "timestamp": "2026-02-19T12:43:51.614630"}
+{"type": "TaskCompleted", "from": "Worker", "content": "I did the job.", "id": "task_1", "timestamp": "2026-02-19T12:43:51.405317"}
+{"type": "TestEvent", "content": "hello", "timestamp": "2026-02-19T12:50:43.307074"}
+{"type": "TestEvent", "content": "hello", "timestamp": "2026-02-19T12:54:36.723139"}
+{"type": "TestEvent", "content": "hello", "timestamp": "2026-02-19T12:55:18.184347"}
+{"type": "TaskCompleted", "from": "Grok", "correlation_id": "req_1771505775025", "content": "Hello! How can I help you today?", "target": "req_1771505775025", "timestamp": "2026-02-19T12:56:18.634911"}
+{"type": "TaskCompleted", "from": "Grok", "correlation_id": "req_1771505850277", "content": "Hello! How can I help you today?", "target": "req_1771505850277", "timestamp": "2026-02-19T12:57:35.229509"}
+{"type": "TestEvent", "content": "hello", "timestamp": "2026-02-19T12:57:35.664434"}
+{"type": "TaskCompleted", "from": "Grok", "correlation_id": "req_1771506007269", "content": "Hi! How can I help you today?", "target": "req_1771506007269", "timestamp": "2026-02-19T13:00:12.704007"}
+{"type": "TestEvent", "content": "hello", "timestamp": "2026-02-19T13:00:13.086082"}

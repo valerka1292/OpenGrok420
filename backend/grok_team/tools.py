@@ -115,14 +115,205 @@ PYTHON_RUN_FUNCTION = {
     }
 }
 
+SPAWN_AGENT_FUNCTION = {
+    "name": "spawn_agent",
+    "description": "Create and start a new agent collaborator with a specific role and instructions.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "description": "Unique name for the agent (e.g., 'Analyst_Bob')."},
+            "system_prompt": {"type": "string", "description": "The system instructions/persona for the agent."},
+            "temperature": {"type": "number", "description": "Creativity level (0.0 to 1.0)."}
+        },
+        "required": ["name", "system_prompt"]
+    }
+}
+
+KILL_AGENT_FUNCTION = {
+    "name": "kill_agent",
+    "description": "Terminate a running agent process.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "description": "Name of the agent to kill."}
+        },
+        "required": ["name"]
+    }
+}
+
+LIST_AGENTS_FUNCTION = {
+    "name": "list_agents",
+    "description": "List all currently active agents.",
+    "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": False
+    }
+}
+
+ALLOCATE_BUDGET_FUNCTION = {
+    "name": "allocate_budget",
+    "description": "Allocate additional budget (steps/tokens) to a specific agent.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "agent_name": {"type": "string", "description": "Name of the agent."},
+            "amount": {"type": "integer", "description": "Amount to add."}
+        },
+        "required": ["agent_name", "amount"]
+    }
+}
+
+READ_ARTIFACT_FUNCTION = {
+    "name": "read_artifact",
+    "description": "Read content from a stored artifact (large file/output) by ID.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "artifact_id": {"type": "string", "description": "ID of the artifact to read."},
+            "start": {"type": "integer", "description": "Start index (character offset). Default 0."},
+            "length": {"type": "integer", "description": "Number of characters to read. Default 4000."}
+        },
+        "required": ["artifact_id"]
+    }
+}
+
 ALL_TOOLS = [
     {"type": "function", "function": CHATROOM_SEND_FUNCTION},
     {"type": "function", "function": WEB_SEARCH_FUNCTION},
+    {"type": "function", "function": PYTHON_RUN_FUNCTION},
     {"type": "function", "function": SET_CONVERSATION_TITLE_FUNCTION},
-    {"type": "function", "function": PYTHON_RUN_FUNCTION}
+    {"type": "function", "function": SPAWN_AGENT_FUNCTION},
+    {"type": "function", "function": KILL_AGENT_FUNCTION},
+    {"type": "function", "function": LIST_AGENTS_FUNCTION},
+    {"type": "function", "function": ALLOCATE_BUDGET_FUNCTION},
+    {"type": "function", "function": READ_ARTIFACT_FUNCTION}
 ]
 
-# Python Implementations (for execution handling)
+# Background Process Registry
+# Format: {pid: {"proc": Process, "logs": List[str], "task": Task, "command": str}}
+PROCESS_REGISTRY: Dict[int, Dict[str, Any]] = {}
+
+START_PROCESS_FUNCTION = {
+    "name": "start_process",
+    "description": "Start a long-running background process (e.g., a server). Returns a PID.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "command": {"type": "string", "description": "Shell command to execute."}
+        },
+        "required": ["command"]
+    }
+}
+
+READ_LOGS_FUNCTION = {
+    "name": "read_process_logs",
+    "description": "Read the latest logs (stdout/stderr) from a background process.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "pid": {"type": "integer", "description": "Process ID returned by start_process."},
+            "lines": {"type": "integer", "description": "Number of recent lines to read. Default 20."}
+        },
+        "required": ["pid"]
+    }
+}
+
+STOP_PROCESS_FUNCTION = {
+    "name": "stop_process",
+    "description": "Terminate a background process.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "pid": {"type": "integer", "description": "Process ID."}
+        },
+        "required": ["pid"]
+    }
+}
+
+ALL_TOOLS.extend([
+    {"type": "function", "function": START_PROCESS_FUNCTION},
+    {"type": "function", "function": READ_LOGS_FUNCTION},
+    {"type": "function", "function": STOP_PROCESS_FUNCTION}
+])
+
+async def _log_reader(pid: int):
+    """Internal task to read logs from a process."""
+    if pid not in PROCESS_REGISTRY:
+        return
+    
+    entry = PROCESS_REGISTRY[pid]
+    proc = entry["proc"]
+    
+    # We need to read stdout and stderr concurrently or just one stream?
+    # subprocess_subprocess_exec with PIPE might buffer.
+    # Let's just read lines.
+    
+    async def read_stream(stream, prefix):
+        while True:
+            line = await stream.readline()
+            if not line:
+                break
+            decoded = line.decode().strip()
+            if decoded:
+                entry["logs"].append(f"[{prefix}] {decoded}")
+                # Keep log size manageable
+                if len(entry["logs"]) > 1000:
+                    entry["logs"] = entry["logs"][-1000:]
+                    
+    await asyncio.gather(
+        read_stream(proc.stdout, "STDOUT"),
+        read_stream(proc.stderr, "STDERR")
+    )
+    await proc.wait()
+    entry["logs"].append(f"[SYSTEM] Process exited with code {proc.returncode}")
+
+async def start_process(command: str) -> str:
+    """Starts a background process."""
+    try:
+        proc = await asyncio.create_subprocess_shell(
+            command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        pid = proc.pid
+        
+        PROCESS_REGISTRY[pid] = {
+            "proc": proc,
+            "logs": [],
+            "command": command,
+            "task": None # Set below
+        }
+        
+        # Start log reader task
+        task = asyncio.create_task(_log_reader(pid))
+        PROCESS_REGISTRY[pid]["task"] = task
+        
+        return(f"Process started. PID: {pid}")
+    except Exception as e:
+        return f"Error starting process: {e}"
+
+async def read_process_logs(pid: int, lines: int = 20) -> str:
+    if pid not in PROCESS_REGISTRY:
+        return "Error: PID not found."
+    
+    logs = PROCESS_REGISTRY[pid]["logs"]
+    return "\n".join(logs[-lines:]) or "<no new logs>"
+
+async def stop_process(pid: int) -> str:
+    if pid not in PROCESS_REGISTRY:
+        return "Error: PID not found."
+    
+    entry = PROCESS_REGISTRY[pid]
+    proc = entry["proc"]
+    
+    try:
+        proc.terminate()
+        await proc.wait()
+        return f"Process {pid} terminated."
+    except Exception as e:
+        return f"Error terminating process: {e}"
+
 
 def chatroom_send(message: str, to: Union[str, List[str]]):
     """
@@ -162,28 +353,29 @@ async def execute_web_search(query: str, num_results: int = 10) -> List[Dict[str
 
 
 async def execute_python_run(code: str) -> str:
-    """Execute Python code using `python -c` and return formatted execution output."""
-
-    def _run() -> subprocess.CompletedProcess:
-        return subprocess.run(
-            [sys.executable, "-c", code],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
+    """Execute Python code using `asyncio.create_subprocess_exec` and return output."""
+    try:
+        process = await asyncio.create_subprocess_exec(
+            sys.executable, "-c", code,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        
+        try:
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+            return "Error: Python execution timed out after 30 seconds."
+            
+        stdout_str = stdout.decode().strip() or "<empty>"
+        stderr_str = stderr.decode().strip() or "<empty>"
+        
+        return (
+            f"Return code: {process.returncode}\n"
+            f"STDOUT:\n{stdout_str}\n\n"
+            f"STDERR:\n{stderr_str}"
         )
 
-    try:
-        result = await asyncio.to_thread(_run)
-    except subprocess.TimeoutExpired:
-        return "Error: Python execution timed out after 30 seconds."
     except Exception as exc:
         return f"Error executing python: {exc}"
-
-    stdout = result.stdout.strip() or "<empty>"
-    stderr = result.stderr.strip() or "<empty>"
-    return (
-        f"Return code: {result.returncode}\n"
-        f"STDOUT:\n{stdout}\n\n"
-        f"STDERR:\n{stderr}"
-    )
