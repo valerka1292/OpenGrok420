@@ -3,19 +3,20 @@ import { ChevronRight, ChevronDown, Search, Clock, MessageSquare, Zap } from 'lu
 import { motion, AnimatePresence } from 'framer-motion';
 import MarkdownRenderer from './MarkdownRenderer';
 import { Thought } from '../store/useChat';
+import useChat from '../store/useChat';
 
 const agentColors: Record<string, string> = {
-    Grok: "bg-green-500",
-    Harper: "bg-purple-500",
-    Benjamin: "bg-blue-500",
-    Lucas: "bg-red-500"
+    Grok: 'bg-green-500',
+    Harper: 'bg-purple-500',
+    Benjamin: 'bg-blue-500',
+    Lucas: 'bg-red-500',
 };
 
 const agentTextColors: Record<string, string> = {
-    Grok: "text-green-500",
-    Harper: "text-purple-500",
-    Benjamin: "text-blue-500",
-    Lucas: "text-red-500"
+    Grok: 'text-green-500',
+    Harper: 'text-purple-500',
+    Benjamin: 'text-blue-500',
+    Lucas: 'text-red-500',
 };
 
 interface ThoughtsAccordionProps {
@@ -28,12 +29,11 @@ interface ThoughtsAccordionProps {
 export default function ThoughtsAccordion({ thoughts, isThinking, duration = 0, startTime = 0 }: ThoughtsAccordionProps) {
     const [isOpen, setIsOpen] = useState(isThinking);
     const [elapsed, setElapsed] = useState(duration);
+    const { pendingGuardPrompt, resolveGuardPrompt } = useChat();
 
-    // Timer logic
     useEffect(() => {
         let interval: NodeJS.Timeout;
         if (isThinking && startTime) {
-            // Update immediately
             setElapsed((Date.now() - startTime) / 1000);
 
             interval = setInterval(() => {
@@ -45,14 +45,12 @@ export default function ThoughtsAccordion({ thoughts, isThinking, duration = 0, 
         return () => clearInterval(interval);
     }, [isThinking, startTime, duration]);
 
-    // Keep open if thinking
     useEffect(() => {
         if (isThinking) setIsOpen(true);
     }, [isThinking]);
 
-    // Format helper: 12.5s or 1m 5.2s
     const formatTime = (secs: number) => {
-        if (!secs) return "0.0s";
+        if (!secs) return '0.0s';
         if (secs < 60) return `${secs.toFixed(1)}s`;
         const m = Math.floor(secs / 60);
         const s = (secs % 60).toFixed(1);
@@ -61,8 +59,7 @@ export default function ThoughtsAccordion({ thoughts, isThinking, duration = 0, 
 
     if (!thoughts.length && !isThinking) return null;
 
-    // Get unique agents involved
-    const activeAgents = [...new Set(thoughts.map(t => t.agent).filter(Boolean) as string[])];
+    const activeAgents = [...new Set(thoughts.map((t) => t.agent).filter(Boolean) as string[])];
 
     return (
         <div className="mb-6 rounded-lg border border-border-subtle bg-bg-sidebar/30 overflow-hidden">
@@ -70,11 +67,10 @@ export default function ThoughtsAccordion({ thoughts, isThinking, duration = 0, 
                 onClick={() => setIsOpen(!isOpen)}
                 className="flex items-center gap-3 p-3 w-full text-left bg-white/5 hover:bg-white/10 transition-colors"
             >
-                {/* Avatars Stack */}
                 <div className="flex -space-x-2">
                     {activeAgents.length > 0 ? (
-                        activeAgents.map((name, i) => (
-                            <div key={name} className={`w-5 h-5 rounded-full border border-bg-body flex items-center justify-center text-[9px] text-white font-bold ${agentColors[name] || "bg-gray-500"} z-${10 - i}`}>
+                        activeAgents.map((name) => (
+                            <div key={name} className={`w-5 h-5 rounded-full border border-bg-body flex items-center justify-center text-[9px] text-white font-bold ${agentColors[name] || 'bg-gray-500'}`}>
                                 {name[0]}
                             </div>
                         ))
@@ -105,24 +101,46 @@ export default function ThoughtsAccordion({ thoughts, isThinking, duration = 0, 
                 {isOpen && (
                     <motion.div
                         initial={{ height: 0 }}
-                        animate={{ height: "auto" }}
+                        animate={{ height: 'auto' }}
                         exit={{ height: 0 }}
                         transition={{ duration: 0.2 }}
                         className="overflow-hidden"
                     >
                         <div className="p-4 space-y-4 bg-bg-body/50 text-[13px]">
+                            {pendingGuardPrompt && isThinking && (
+                                <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 ml-9">
+                                    <div className="text-amber-200 text-xs mb-2">
+                                        Агент <strong>{pendingGuardPrompt.agent}</strong> превысил лимит {pendingGuardPrompt.scope} ({pendingGuardPrompt.limit}). Продолжить?
+                                    </div>
+                                    <div className="flex gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={() => resolveGuardPrompt('yes')}
+                                            className="px-2.5 py-1 rounded bg-emerald-500/20 border border-emerald-400/40 text-emerald-200 text-xs hover:bg-emerald-500/30"
+                                        >
+                                            Да
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => resolveGuardPrompt('no')}
+                                            className="px-2.5 py-1 rounded bg-rose-500/20 border border-rose-400/40 text-rose-200 text-xs hover:bg-rose-500/30"
+                                        >
+                                            Нет
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+
                             {thoughts.map((t, idx) => (
                                 <div key={idx} className="flex gap-3 animate-in fade-in slide-in-from-top-2 duration-300">
-                                    {/* Column 1: Avatar */}
                                     <div className="flex-shrink-0 mt-1">
-                                        <div className={`w-6 h-6 rounded-md flex items-center justify-center text-[10px] font-bold text-white shadow-sm ${agentColors[t.agent || ''] || "bg-gray-600"}`}>
-                                            {t.agent ? t.agent[0] : "?"}
+                                        <div className={`w-6 h-6 rounded-md flex items-center justify-center text-[10px] font-bold text-white shadow-sm ${agentColors[t.agent || ''] || 'bg-gray-600'}`}>
+                                            {t.agent ? t.agent[0] : '?'}
                                         </div>
                                     </div>
 
-                                    {/* Column 2: Content */}
                                     <div className="flex-1 min-w-0">
-                                        <div className={`text-xs font-bold mb-1 ${agentTextColors[t.agent || ''] || "text-text-secondary"}`}>
+                                        <div className={`text-xs font-bold mb-1 ${agentTextColors[t.agent || ''] || 'text-text-secondary'}`}>
                                             {t.agent}
                                         </div>
 
@@ -154,7 +172,6 @@ export default function ThoughtsAccordion({ thoughts, isThinking, duration = 0, 
                                                 <span>Ожидает ответа...</span>
                                             </div>
                                         ) : (
-                                            // Regular thought
                                             <div className="text-text-secondary/90 leading-relaxed">
                                                 <MarkdownRenderer content={t.content || ''} className="text-xs prose-p:my-1 text-text-secondary/90" />
                                             </div>

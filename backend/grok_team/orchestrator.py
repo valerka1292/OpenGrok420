@@ -8,8 +8,8 @@ from grok_team.tools import execute_python_run, execute_web_search
 
 
 class Orchestrator:
-    MAX_SESSION_STEPS = 60
-    MAX_AGENT_TOOL_CALLS_PER_STEP = 8
+    MAX_SESSION_STEPS = 100
+    MAX_AGENT_TOOL_CALLS_PER_STEP = 10
     HISTORY_PREVIEW_ITEMS = 18
 
     def __init__(self):
@@ -226,6 +226,7 @@ class Orchestrator:
         """Execute a collaborator event-driven step and return SSE events generated during it."""
         events: List[Dict[str, Any]] = []
         self._ingest_mailbox(agent)
+        intermediate_notes: list[str] = []
 
         tool_rounds = 0
         while tool_rounds < self.MAX_AGENT_TOOL_CALLS_PER_STEP:
@@ -236,6 +237,7 @@ class Orchestrator:
 
             if content:
                 events.append({"type": "thought", "agent": agent.name, "content": content})
+                intermediate_notes.append(content)
 
             if not tool_calls:
                 if content:
@@ -260,17 +262,27 @@ class Orchestrator:
             if not continue_after_tools:
                 return events
 
+        summary = "\n\n".join(intermediate_notes[-3:]).strip()
         fallback = (
-            f"[AUTO-GUARD] Agent {agent.name} hit tool-step budget and was stopped. "
-            "Please continue with available data or ask a targeted follow-up."
+            f"[AUTO-GUARD] Агент {agent.name} превысил лимит tool-step "
+            f"({self.MAX_AGENT_TOOL_CALLS_PER_STEP}). Продолжить выполнение?"
         )
         self.agents[LEADER_NAME].mailbox.append({"from": agent.name, "content": fallback})
         events.append({"type": "thought", "agent": agent.name, "content": fallback})
+        events.append({
+            "type": "guard_prompt",
+            "agent": agent.name,
+            "scope": "tool-step",
+            "limit": self.MAX_AGENT_TOOL_CALLS_PER_STEP,
+            "intermediate": summary,
+            "content": fallback,
+        })
         return events
 
     async def _run_agent_step_with_logic(self, agent: Agent) -> None:
         """Execute a collaborator event-driven step (non-streaming)."""
         self._ingest_mailbox(agent)
+        intermediate_notes: list[str] = []
 
         tool_rounds = 0
         while tool_rounds < self.MAX_AGENT_TOOL_CALLS_PER_STEP:
@@ -281,6 +293,7 @@ class Orchestrator:
 
             if content:
                 print(f"[Orchestrator Log] {agent.name} says/thinks: {content}")
+                intermediate_notes.append(content)
 
             if not tool_calls:
                 if content:
@@ -302,9 +315,11 @@ class Orchestrator:
             if not continue_after_tools:
                 return
 
+        summary = "\n\n".join(intermediate_notes[-3:]).strip()
         fallback = (
-            f"[AUTO-GUARD] Agent {agent.name} hit tool-step budget and was stopped. "
-            "Please continue with available data or ask a targeted follow-up."
+            f"[AUTO-GUARD] Агент {agent.name} превысил лимит tool-step "
+            f"({self.MAX_AGENT_TOOL_CALLS_PER_STEP}). Продолжить выполнение?"
+            + (f"\n\nПромежуточные результаты:\n{summary}" if summary else "")
         )
         self.agents[LEADER_NAME].mailbox.append({"from": agent.name, "content": fallback})
 
