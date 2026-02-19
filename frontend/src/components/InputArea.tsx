@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, LoaderCircle, Send, SlidersHorizontal, Sparkles, Square, Trash2 } from 'lucide-react';
+import { AlertCircle, LoaderCircle, Send, Sparkles, Square, Trash2 } from 'lucide-react';
 import useChat from '../store/useChat';
-import SettingsModal from './SettingsModal';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.trim() || '';
 
@@ -17,7 +16,6 @@ const parseNdjsonChunk = (rawLine: string) => {
 
 export default function InputArea() {
     const [input, setInput] = useState('');
-    const [isSettingsOpen, setIsSettingsOpen] = useState(false);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -28,7 +26,6 @@ export default function InputArea() {
         isGenerating,
         stopGeneration,
         temperature,
-        setAgentTemperature,
         currentStatus,
         lastError,
         clearMessages,
@@ -38,11 +35,15 @@ export default function InputArea() {
 
     const canSubmit = useMemo(() => input.trim().length > 0 && !isGenerating, [input, isGenerating]);
 
+    const resizeInput = () => {
+        if (!textareaRef.current) return;
+        textareaRef.current.style.height = '44px';
+        textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 264)}px`;
+    };
+
     const handleInputChange = (value: string) => {
         setInput(value);
-        if (!textareaRef.current) return;
-        textareaRef.current.style.height = '68px';
-        textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 220)}px`;
+        resizeInput();
     };
 
     const handleStop = () => {
@@ -153,7 +154,7 @@ export default function InputArea() {
         const userMsg = input.trim();
         setInput('');
         if (textareaRef.current) {
-            textareaRef.current.style.height = '68px';
+            textareaRef.current.style.height = '44px';
         }
 
         await sendMessage(userMsg);
@@ -166,98 +167,83 @@ export default function InputArea() {
         void sendMessage(queued);
     }, [isGenerating, consumeQueuedPrompt]);
 
-    return (
-        <>
-            <SettingsModal
-                isOpen={isSettingsOpen}
-                onClose={() => setIsSettingsOpen(false)}
-                temperatures={temperature}
-                setAgentTemperature={setAgentTemperature}
-            />
+    useEffect(() => {
+        const onKeyDown = (event: KeyboardEvent) => {
+            if (event.key === '/' && document.activeElement !== textareaRef.current) {
+                event.preventDefault();
+                textareaRef.current?.focus();
+            }
+        };
+        window.addEventListener('keydown', onKeyDown);
+        return () => window.removeEventListener('keydown', onKeyDown);
+    }, []);
 
-            <div className="p-4 pt-2 bg-gradient-to-t from-bg-body via-bg-body to-transparent z-10 w-full max-w-5xl mx-auto">
-                <div className="mb-3 flex items-center justify-between gap-3 text-xs px-2">
-                    <div className="inline-flex items-center gap-2 text-text-muted">
+    return (
+        <div className="px-4 pb-4 pt-2 w-full">
+            <div className="max-w-[768px] mx-auto">
+                <div className="mb-2 flex items-center justify-between gap-3 text-xs px-1 text-text-tertiary">
+                    <div className="inline-flex items-center gap-2">
                         {isGenerating ? <LoaderCircle size={13} className="animate-spin" /> : <Sparkles size={13} />}
                         <span className="truncate">{currentStatus}</span>
                     </div>
-                    <div className="flex items-center gap-2">
-                        {lastError && (
-                            <span className="inline-flex items-center gap-1 text-red-300 bg-red-500/10 px-2 py-1 rounded-md border border-red-500/30">
-                                <AlertCircle size={12} />
-                                Ошибка ответа
-                            </span>
-                        )}
-                        <button
-                            type="button"
-                            onClick={clearMessages}
-                            className="inline-flex items-center gap-1 text-text-muted hover:text-text-primary px-2 py-1 rounded-md hover:bg-white/5"
-                            title="Очистить диалог"
-                        >
-                            <Trash2 size={12} />
-                            Очистить
-                        </button>
-                    </div>
+                    <button
+                        type="button"
+                        onClick={clearMessages}
+                        className="inline-flex items-center gap-1 px-2 py-1 rounded-md hover:bg-bg-surface-2 text-text-secondary"
+                    >
+                        <Trash2 size={12} /> Clear
+                    </button>
                 </div>
 
                 <form
                     onSubmit={handleSubmit}
-                    className="relative bg-bg-surface/85 backdrop-blur-2xl rounded-2xl border border-border-subtle shadow-xl transition-all duration-300 focus-within:border-accent-blue/35 focus-within:ring-1 focus-within:ring-accent-blue/20 hover:border-text-muted/30"
+                    className="sticky bottom-4 bg-bg-elevated/90 backdrop-blur-xl border border-border-default rounded-2xl shadow-2xl"
                 >
                     <textarea
                         ref={textareaRef}
                         value={input}
                         onChange={(e) => handleInputChange(e.target.value)}
                         onKeyDown={(e) => {
-                            if (e.key === 'Enter' && !e.shiftKey) {
+                            if (e.key === 'Enter' && e.ctrlKey) {
                                 e.preventDefault();
                                 void handleSubmit(e);
                             }
                         }}
-                        placeholder="Спросите Grok Team... (Enter — отправить, Shift+Enter — новая строка)"
-                        className="w-full bg-transparent text-text-primary p-4 pr-14 pl-12 focus:outline-none resize-none h-[68px] max-h-[220px] leading-relaxed placeholder:text-text-muted/60"
+                        placeholder="Message your team..."
+                        className="w-full bg-transparent text-text-primary p-4 focus:outline-none resize-none h-[44px] max-h-[264px] leading-relaxed placeholder:text-text-tertiary"
                     />
 
-                    <div className="absolute bottom-3 left-3">
-                        <button
-                            type="button"
-                            onClick={() => setIsSettingsOpen(true)}
-                            className="p-2 text-text-muted hover:text-text-primary hover:bg-white/5 rounded-lg transition-colors group"
-                            title="Настройки модели"
-                        >
-                            <SlidersHorizontal size={18} className="group-hover:scale-105 transition-transform" />
-                        </button>
-                    </div>
-
-                    <div className="absolute bottom-3 right-3 flex items-center gap-2">
+                    <div className="flex items-center justify-between border-t border-border-subtle px-3 py-2">
+                        <div className="text-xs text-text-tertiary">Ctrl+Enter to send • Temp {temperature.Grok?.toFixed(1) ?? '0.7'}</div>
                         {!isGenerating ? (
                             <button
                                 type="submit"
                                 disabled={!canSubmit}
-                                className={`w-9 h-9 flex items-center justify-center rounded-lg transition-all duration-200 ${canSubmit
-                                    ? 'bg-text-primary text-bg-body hover:bg-white/90 shadow-lg shadow-white/10'
-                                    : 'bg-white/5 text-text-muted cursor-not-allowed'
+                                className={`h-9 px-3 inline-flex items-center gap-2 rounded-lg transition-all ${canSubmit
+                                    ? 'bg-agent-grok/20 text-agent-grok border border-agent-grok/40 hover:shadow-[0_0_20px_rgba(16,185,129,0.3)]'
+                                    : 'bg-white/5 text-text-tertiary border border-border-subtle cursor-not-allowed'
                                     }`}
                             >
-                                <Send size={18} className={canSubmit ? 'ml-0.5' : ''} />
+                                <Send size={15} /> Send
                             </button>
                         ) : (
                             <button
                                 type="button"
                                 onClick={handleStop}
-                                className="w-9 h-9 flex items-center justify-center rounded-lg bg-text-primary text-bg-body hover:bg-white/90 shadow-lg shadow-white/10 animate-in zoom-in-50 duration-200"
+                                className="h-9 px-3 inline-flex items-center gap-2 rounded-lg bg-red-500/20 text-red-300 border border-red-400/40 animate-pulse"
                             >
-                                <Square size={14} fill="currentColor" />
+                                <Square size={13} fill="currentColor" /> Stop
                             </button>
                         )}
                     </div>
                 </form>
 
-                <div className="flex items-center justify-center gap-2 mt-4 text-[10px] uppercase tracking-widest text-text-muted font-medium opacity-60">
-                    <Sparkles size={10} />
-                    <span>Grok 4.20 Beta · Streaming NDJSON</span>
-                </div>
+                {lastError && (
+                    <div className="mt-2 inline-flex items-center gap-1 text-xs text-red-200 bg-red-500/10 border border-red-500/30 px-2 py-1 rounded-md">
+                        <AlertCircle size={12} /> {lastError}
+                    </div>
+                )}
             </div>
-        </>
+        </div>
     );
 }

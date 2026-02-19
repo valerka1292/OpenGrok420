@@ -1,0 +1,81 @@
+import { useEffect, useMemo, useState } from 'react';
+import { Menu, PanelRightOpen } from 'lucide-react';
+import useMediaQuery from '../../hooks/useMediaQuery';
+import useKeyboardShortcut from '../../hooks/useKeyboardShortcut';
+import useChat from '../../store/useChat';
+import StatusBar from './StatusBar';
+import Sidebar from './Sidebar/Sidebar';
+import ChatArea from '../chat/ChatArea';
+import FloatingInput from '../input/FloatingInput';
+import InspectorPanel from './Inspector/InspectorPanel';
+import CommandPalette from '../overlays/CommandPalette';
+import SettingsPanel from '../overlays/SettingsPanel';
+
+const HEALTHCHECK_INTERVAL_MS = 30000;
+
+export default function AppShell() {
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [commandOpen, setCommandOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [queuedPrompt, setQueuedPrompt] = useState<string | null>(null);
+  const [isBackendOnline, setIsBackendOnline] = useState<boolean | null>(null);
+  const isDesktopXl = useMediaQuery('(min-width: 1440px)');
+  const isDesktop = useMediaQuery('(min-width: 1024px)');
+  const { loadConversations, isGenerating, createConversation, clearMessages } = useChat();
+
+  useEffect(() => {
+    let mounted = true;
+    const checkHealth = async () => {
+      try {
+        const response = await fetch('/api/health');
+        if (mounted) setIsBackendOnline(response.ok);
+      } catch { if (mounted) setIsBackendOnline(false); }
+    };
+    void checkHealth();
+    void loadConversations();
+    const t = setInterval(() => { void checkHealth(); void loadConversations(); }, HEALTHCHECK_INTERVAL_MS);
+    return () => { mounted = false; clearInterval(t); };
+  }, [loadConversations]);
+
+  useEffect(() => { if (isGenerating) setInspectorOpen(true); }, [isGenerating]);
+  useEffect(() => { if (isDesktopXl) setInspectorOpen(true); }, [isDesktopXl]);
+
+  useKeyboardShortcut((e) => (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k', () => setCommandOpen(true));
+  useKeyboardShortcut((e) => (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'b', () => setSidebarOpen((v) => !v));
+  useKeyboardShortcut((e) => (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'i', () => setInspectorOpen((v) => !v));
+  useKeyboardShortcut((e) => (e.metaKey || e.ctrlKey) && e.key === ',', () => setSettingsOpen(true));
+
+  const commands = useMemo(() => [
+    { label: 'New Thread', action: () => { void createConversation(); } },
+    { label: 'Toggle Sidebar', action: () => setSidebarOpen((v) => !v) },
+    { label: 'Toggle Inspector', action: () => setInspectorOpen((v) => !v) },
+    { label: 'Settings', action: () => setSettingsOpen(true) },
+    { label: 'Clear Thread', action: () => clearMessages() },
+  ], [createConversation, clearMessages]);
+
+  return (
+    <div className="h-full flex flex-col bg-bg-global text-text-primary overflow-hidden">
+      <a href="#main-content" className="sr-only focus:not-sr-only">Skip to content</a>
+      <StatusBar online={isBackendOnline} onOpenSettings={() => setSettingsOpen(true)} />
+      <div className="flex-1 flex min-h-0 relative">
+        {isDesktop ? (
+          <aside className={`${sidebarOpen ? 'w-[260px]' : 'w-0'} border-r border-border-subtle bg-bg-surface-1 transition-all overflow-hidden`}><Sidebar /></aside>
+        ) : (
+          sidebarOpen ? <div className="absolute inset-0 z-30 bg-[var(--bg-overlay)]" onClick={() => setSidebarOpen(false)}><aside className="w-[280px] h-full bg-bg-surface-1" onClick={(e) => e.stopPropagation()}><Sidebar /></aside></div> : null
+        )}
+        {!isDesktop && !sidebarOpen ? <button onClick={() => setSidebarOpen(true)} className="absolute z-20 left-3 top-3 p-2 rounded bg-bg-surface-2"><Menu size={16} /></button> : null}
+
+        <main className="flex-1 min-w-0 flex flex-col">
+          <div className="flex justify-end p-2 lg:hidden"><button onClick={() => setInspectorOpen((v) => !v)} className="inline-flex items-center gap-1 text-xs px-2 py-1 border border-border-subtle rounded"><PanelRightOpen size={12} />Inspector</button></div>
+          <ChatArea queuePrompt={setQueuedPrompt} />
+          <div className="p-4 pt-2"><FloatingInput queuedPrompt={queuedPrompt} consumeQueuedPrompt={() => setQueuedPrompt(null)} /></div>
+        </main>
+
+        {isDesktopXl ? <InspectorPanel open onClose={() => setInspectorOpen(false)} overlay={false} /> : <InspectorPanel open={inspectorOpen} onClose={() => setInspectorOpen(false)} overlay />}
+      </div>
+      <CommandPalette open={commandOpen} onClose={() => setCommandOpen(false)} commands={commands} />
+      <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+    </div>
+  );
+}
