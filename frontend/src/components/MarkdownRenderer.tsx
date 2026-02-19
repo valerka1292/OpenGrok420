@@ -62,17 +62,7 @@ export default function MarkdownRenderer({ content, className = '' }: MarkdownRe
     );
 
     return (
-        <div
-            className={`prose prose-invert max-w-none prose-sm md:prose-base
-            prose-p:leading-relaxed prose-p:text-text-secondary prose-p:my-3
-            prose-pre:p-0 prose-pre:bg-transparent
-            prose-code:text-accent-blue prose-code:bg-white/5 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:before:content-none prose-code:after:content-none
-            prose-headings:text-text-primary prose-strong:text-text-primary prose-a:text-accent-blue prose-a:no-underline hover:prose-a:underline
-            prose-ul:my-3 prose-ol:my-3 prose-li:my-1
-            prose-blockquote:border-l-accent-blue prose-blockquote:text-text-secondary prose-blockquote:italic
-            prose-table:my-0 prose-th:text-text-primary prose-td:text-text-secondary
-            ${className}`}
-        >
+        <div className={`markdown-body ${className}`}>
             <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 components={{
