@@ -6,6 +6,7 @@ export type StreamEventType =
     | 'tool_use'
     | 'chatroom_send'
     | 'wait'
+    | 'guard_prompt'
     | 'token'
     | 'error'
     | 'conversation'
@@ -13,13 +14,16 @@ export type StreamEventType =
     | 'done';
 
 export interface Thought {
-    type: 'thought' | 'tool_use' | 'chatroom_send' | 'wait' | 'status';
+    type: 'thought' | 'tool_use' | 'chatroom_send' | 'wait' | 'status' | 'guard_prompt';
     agent?: string;
     content?: string;
     tool?: string;
     query?: string;
     to?: string;
     num_results?: number;
+    scope?: string;
+    limit?: number;
+    intermediate?: string;
 }
 
 export interface Message {
@@ -51,6 +55,13 @@ interface ConversationPayload {
     messages: Message[];
 }
 
+interface GuardPromptState {
+    agent: string;
+    scope: string;
+    limit: number;
+    intermediate: string;
+}
+
 export interface ChatState {
     messages: Message[];
     isGenerating: boolean;
@@ -62,6 +73,8 @@ export interface ChatState {
     startTime: number;
     conversations: ConversationSummary[];
     currentConversationId: string | null;
+    pendingGuardPrompt: GuardPromptState | null;
+    queuedPrompt: string | null;
 
     setAgentTemperature: (agent: string, temp: number) => void;
     addUserMessage: (content: string) => void;
@@ -69,6 +82,8 @@ export interface ChatState {
     stopGeneration: (errorMessage?: string) => void;
     handleStreamEvent: (event: StreamEvent) => void;
     clearMessages: () => void;
+    resolveGuardPrompt: (decision: 'yes' | 'no') => void;
+    consumeQueuedPrompt: () => string | null;
 
     loadConversations: (query?: string) => Promise<void>;
     loadConversation: (id: string) => Promise<void>;
@@ -80,7 +95,7 @@ export interface ChatState {
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.trim() || '';
 
 const isThoughtEvent = (type: StreamEventType): type is Exclude<Thought['type'], 'status'> => (
-    type === 'thought' || type === 'tool_use' || type === 'chatroom_send' || type === 'wait'
+    type === 'thought' || type === 'tool_use' || type === 'chatroom_send' || type === 'wait' || type === 'guard_prompt'
 );
 
 const useChat = create<ChatState>((set, get) => ({
@@ -92,6 +107,8 @@ const useChat = create<ChatState>((set, get) => ({
     lastError: '',
     conversations: [],
     currentConversationId: null,
+    pendingGuardPrompt: null,
+    queuedPrompt: null,
     temperature: {
         Grok: 0.7,
         Harper: 0.7,
@@ -118,6 +135,8 @@ const useChat = create<ChatState>((set, get) => ({
         currentStatus: 'Диалог очищен',
         lastError: '',
         currentConversationId: null,
+        pendingGuardPrompt: null,
+        queuedPrompt: null,
     }),
 
     startGeneration: () => set({
@@ -137,12 +156,48 @@ const useChat = create<ChatState>((set, get) => ({
         });
     },
 
+    resolveGuardPrompt: (decision) => {
+        const guard = get().pendingGuardPrompt;
+        if (!guard) return;
+
+        const base = `Агент ${guard.agent} превысил лимит ${guard.scope} (${guard.limit}).`;
+        const intermediateBlock = guard.intermediate
+            ? `\n\nПромежуточные результаты агента:\n${guard.intermediate}`
+            : '';
+
+        const queuedPrompt = decision === 'yes'
+            ? `${base} Продолжи выполнение с сохранением текущего контекста.`
+            : `${base} Останови его и верни ответ лидера с краткой сводкой.${intermediateBlock}`;
+
+        set({
+            queuedPrompt,
+            pendingGuardPrompt: null,
+            currentStatus: decision === 'yes' ? 'Подтверждено продолжение работы…' : 'Запрошено завершение по лимиту…',
+        });
+    },
+
+    consumeQueuedPrompt: () => {
+        const nextPrompt = get().queuedPrompt;
+        set({ queuedPrompt: null });
+        return nextPrompt;
+    },
+
     handleStreamEvent: (event) => {
         const { type } = event;
 
         if (isThoughtEvent(type)) {
             set((state) => ({
                 currentThoughts: [...state.currentThoughts, event as Thought],
+                ...(type === 'guard_prompt'
+                    ? {
+                        pendingGuardPrompt: {
+                            agent: String(event.agent ?? 'Unknown'),
+                            scope: String(event.scope ?? 'tool-step'),
+                            limit: Number(event.limit ?? 0),
+                            intermediate: String(event.intermediate ?? ''),
+                        },
+                    }
+                    : {}),
             }));
             return;
         }
@@ -239,6 +294,8 @@ const useChat = create<ChatState>((set, get) => ({
             currentResponse: '',
             lastError: '',
             currentStatus: 'История загружена',
+            pendingGuardPrompt: null,
+            queuedPrompt: null,
         });
     },
 
@@ -257,6 +314,8 @@ const useChat = create<ChatState>((set, get) => ({
             currentResponse: '',
             currentStatus: 'Новый диалог',
             lastError: '',
+            pendingGuardPrompt: null,
+            queuedPrompt: null,
         });
         await get().loadConversations();
     },

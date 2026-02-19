@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, LoaderCircle, Send, SlidersHorizontal, Sparkles, Square, Trash2 } from 'lucide-react';
 import useChat from '../store/useChat';
 import SettingsModal from './SettingsModal';
@@ -33,6 +33,7 @@ export default function InputArea() {
         lastError,
         clearMessages,
         currentConversationId,
+        consumeQueuedPrompt,
     } = useChat();
 
     const canSubmit = useMemo(() => input.trim().length > 0 && !isGenerating, [input, isGenerating]);
@@ -49,16 +50,7 @@ export default function InputArea() {
         stopGeneration('Поток остановлен пользователем');
     };
 
-    const handleSubmit = async (e: React.FormEvent | React.KeyboardEvent) => {
-        e.preventDefault();
-        if (!canSubmit) return;
-
-        const userMsg = input.trim();
-        setInput('');
-        if (textareaRef.current) {
-            textareaRef.current.style.height = '68px';
-        }
-
+    const sendMessage = async (userMsg: string) => {
         addUserMessage(userMsg);
         startGeneration();
 
@@ -153,6 +145,26 @@ export default function InputArea() {
             abortControllerRef.current = null;
         }
     };
+
+    const handleSubmit = async (e: React.FormEvent | React.KeyboardEvent) => {
+        e.preventDefault();
+        if (!canSubmit) return;
+
+        const userMsg = input.trim();
+        setInput('');
+        if (textareaRef.current) {
+            textareaRef.current.style.height = '68px';
+        }
+
+        await sendMessage(userMsg);
+    };
+
+    useEffect(() => {
+        if (isGenerating) return;
+        const queued = consumeQueuedPrompt();
+        if (!queued) return;
+        void sendMessage(queued);
+    }, [isGenerating, consumeQueuedPrompt]);
 
     return (
         <>
