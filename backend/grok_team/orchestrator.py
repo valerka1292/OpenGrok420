@@ -16,6 +16,27 @@ class Orchestrator:
         self.agents: Dict[str, Agent] = {name: Agent(name) for name in ALL_AGENT_NAMES}
         self._leader_pending_targets: set[str] = set()
 
+    def _active_agent_names(self, active_tasks: Dict[str, asyncio.Task]) -> List[str]:
+        return [name for name, task in active_tasks.items() if not task.done()]
+
+    def _inject_leader_wait_status(self, leader: Agent, active_tasks: Dict[str, asyncio.Task]) -> Optional[Dict[str, str]]:
+        active_agent_names = self._active_agent_names(active_tasks)
+        if not active_agent_names:
+            return None
+
+        system_status = {
+            "role": "system",
+            "content": (
+                "[SYSTEM STATUS] Ожидается ответ от агентов: "
+                f"{', '.join(active_agent_names)}. "
+                "Вызови инструмент `wait`, чтобы дождаться их ответа. "
+                "НЕ ПИШИ финальный ответ пользователю и промежуточные рассуждения, "
+                "пока не получишь данные от всех агентов!"
+            ),
+        }
+        leader.messages.append(system_status)
+        return system_status
+
     def restore_leader_history(self, messages: List[Dict[str, str]]) -> None:
         """Restore persisted user/assistant history into leader context for multi-turn continuity."""
         leader = self.agents[LEADER_NAME]
@@ -41,7 +62,12 @@ class Orchestrator:
 
             if leader_mailbox_ingested > 0 or session_steps == 0 or leader_has_pending_follow_up:
                 leader_has_pending_follow_up = False
-                response = await self._run_agent(leader)
+                injected_status = self._inject_leader_wait_status(leader, active_tasks)
+                try:
+                    response = await self._run_agent(leader)
+                finally:
+                    if injected_status and leader.messages and leader.messages[-1] is injected_status:
+                        leader.messages.pop()
                 session_steps += 1
 
                 content = response.get("content")
@@ -128,13 +154,18 @@ class Orchestrator:
 
             if leader_mailbox_ingested > 0 or session_steps == 0 or leader_has_pending_follow_up:
                 leader_has_pending_follow_up = False
-                response = await self._run_agent(leader)
+                injected_status = self._inject_leader_wait_status(leader, active_tasks)
+                try:
+                    response = await self._run_agent(leader)
+                finally:
+                    if injected_status and leader.messages and leader.messages[-1] is injected_status:
+                        leader.messages.pop()
                 session_steps += 1
 
                 content = response.get("content")
                 tool_calls = response.get("tool_calls") or []
 
-                if content:
+                if content and not tool_calls:
                     yield {"type": "thought", "agent": leader.name, "content": content}
 
                 if not tool_calls and content:
