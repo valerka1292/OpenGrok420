@@ -163,8 +163,8 @@ export default function InputArea() {
     useEffect(() => {
         if (isGenerating) return;
         const queued = consumeQueuedPrompt();
-        if (!queued) return;
-        void sendMessage(queued);
+        if (!queued.prompt) return;
+        void sendMessage(queued.prompt);
     }, [isGenerating, consumeQueuedPrompt]);
 
     useEffect(() => {
