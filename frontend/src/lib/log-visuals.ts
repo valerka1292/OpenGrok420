@@ -2,12 +2,12 @@ import { AgentName, agentConfig } from './agent-config';
 import { Thought } from '../store/useChat';
 
 export const logTypeColorMap: Record<Thought['type'], string> = {
-  thought: '#64748b',
-  status: '#64748b',
-  tool_use: '#8b5cf6',
-  chatroom_send: '#0ea5e9',
-  wait: '#f59e0b',
-  guard_prompt: '#ef4444',
+  thought: '#94a3b8',
+  status: '#94a3b8',
+  tool_use: '#4ade80',
+  chatroom_send: '#f472b6',
+  wait: '#facc15',
+  guard_prompt: '#f87171',
 };
 
 export function getAgentColor(agent?: string) {
@@ -22,10 +22,10 @@ export function getThoughtGradientStyle(agent?: string, type: Thought['type'] = 
   const logColor = logTypeColorMap[type] ?? logTypeColorMap.thought;
 
   return {
-    backgroundImage: `linear-gradient(135deg, color-mix(in srgb, ${agentColor} 14%, transparent) 0%, color-mix(in srgb, ${logColor} 10%, transparent) 100%)`,
+    backgroundImage: `linear-gradient(135deg, color-mix(in srgb, ${agentColor} 20%, transparent) 0%, color-mix(in srgb, ${logColor} 14%, transparent) 100%)`,
     borderLeft: `3px solid ${agentColor}`,
-    borderColor: `color-mix(in srgb, ${logColor} 24%, transparent)`,
-    boxShadow: `inset 0 0 20px color-mix(in srgb, ${agentColor} 5%, transparent)`,
+    borderColor: `color-mix(in srgb, ${logColor} 45%, transparent)`,
+    boxShadow: `inset 0 0 28px color-mix(in srgb, ${agentColor} 10%, transparent)`,
   };
 }
 

@@ -1,10 +1,11 @@
 @import "tailwindcss";
 
 :root {
-  --bg-global:#020617;--bg-surface-1:#0f172a;--bg-surface-2:#1e293b;--bg-surface-3:#334155;--bg-elevated:#0f172a;--bg-overlay:rgba(2,6,23,.82);
-  --border-subtle:#1e293b;--border-default:#3f3f46;--border-strong:#52525b;--border-focus:rgba(59,130,246,.55);
+  --bg-global:#020617;--bg-surface-1:#0f172a;--bg-surface-2:#172033;--bg-surface-3:#2d3a52;--bg-elevated:#0f172a;--bg-overlay:rgba(2,6,23,.82);
+  --border-subtle:#1e293b;--border-default:#52525b;--border-strong:#71717a;--border-focus:rgba(59,130,246,.55);
   --text-primary:#fafafa;--text-secondary:#cbd5e1;--text-tertiary:#94a3b8;--text-disabled:#52525b;
-  --agent-grok:#14b8a6;--agent-grok-dim:rgba(20,184,166,.15);--agent-harper:#c084fc;--agent-harper-dim:rgba(192,132,252,.15);--agent-benjamin:#38bdf8;--agent-benjamin-dim:rgba(56,189,248,.15);--agent-lucas:#fb923c;--agent-lucas-dim:rgba(251,146,60,.15);
+  --agent-grok:#2dd4bf;--agent-grok-dim:rgba(45,212,191,.18);--agent-harper:#e879f9;--agent-harper-dim:rgba(232,121,249,.18);--agent-benjamin:#818cf8;--agent-benjamin-dim:rgba(129,140,248,.18);--agent-lucas:#fb923c;--agent-lucas-dim:rgba(251,146,60,.20);
+  --status-thought:#94a3b8;--status-tool-use:#4ade80;--status-chatroom-send:#f472b6;--status-wait:#facc15;--status-guard-prompt:#f87171;
   --color-success:#10b981;--color-warning:#f59e0b;--color-error:#ef4444;--color-info:#3b82f6;
 }
 
